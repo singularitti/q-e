@@ -1014,6 +1014,7 @@ CONTAINS
          CALL errore( ' card_cell_parameters ', ' two occurrences', 2 )
       ENDIF
       !
+	  ! Use regex to match the option, so cases and brackets do not matter.
       IF ( matches( "BOHR", input_line ) ) THEN
          cell_units = 'bohr'
       ELSEIF ( matches( "ANGSTROM", input_line ) ) THEN
