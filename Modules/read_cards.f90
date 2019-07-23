@@ -384,6 +384,7 @@ CONTAINS
       na_inp = 0
       lsg=.FALSE.
       !
+      ! Use regex to match the option, so cases and brackets do not matter.
       IF ( matches( "CRYSTAL_SG", input_line ) ) THEN
          atomic_positions = 'crystal'
          lsg=.TRUE.
