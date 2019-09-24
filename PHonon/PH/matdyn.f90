@@ -958,7 +958,7 @@ SUBROUTINE frc_blk(dyn,q,tau,nat,nr1,nr2,nr3,frc,at,bg,rws,nrws,f_of_q,fd)
   LOGICAL,SAVE :: first=.true.
   LOGICAL :: fd
   !
-  nr1_=2*nr1
+  nr1_=2*nr1  ! Me: create a larger supercell
   nr2_=2*nr2
   nr3_=2*nr3
   FIRST_TIME : IF (first) THEN
@@ -975,11 +975,11 @@ SUBROUTINE frc_blk(dyn,q,tau,nat,nr1,nr2,nr3,frc,at,bg,rws,nrws,f_of_q,fd)
                 DO n3=-nr3_,nr3_
                    DO i=1, 3
                       r(i) = n1*at(i,1)+n2*at(i,2)+n3*at(i,3)
-                      r_ws(i) = r(i) + tau(i,na)-tau(i,nb)
-                      if (fd) r_ws(i) = r(i) + tau(i,nb)-tau(i,na)
+                      r_ws(i) = r(i) + tau(i,na)-tau(i,nb)    ! Me: `tau` means the atomic positions
+                      if (fd) r_ws(i) = r(i) + tau(i,nb)-tau(i,na)  ! Me: `fd` means finite displacement
                    END DO
                    wscache(n3,n2,n1,nb,na) = wsweight(r_ws,rws,nrws)
-                   total_weight=total_weight + wscache(n3,n2,n1,nb,na) 
+                   total_weight=total_weight + wscache(n3,n2,n1,nb,na)  ! Me: It is a summation over `wscache` tensor.
                 ENDDO
              ENDDO
           ENDDO
