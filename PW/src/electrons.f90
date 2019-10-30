@@ -1223,7 +1223,7 @@ SUBROUTINE electrons_scf ( printout, exxen )
           IF ( okpaw ) THEN
             WRITE( stdout, 9067 ) epaw
             ! Detailed printout of PAW energy components, if verbosity is high
-            IF(iverbosity>0)THEN
+            IF(iverbosity>0)THEN  ! -1 minimal, 0 low, 1 medium, 2 high, 3 debug
             WRITE( stdout, 9068) SUM(etot_cmp_paw(:,1,1)), &
                                  SUM(etot_cmp_paw(:,1,2)), &
                                  SUM(etot_cmp_paw(:,2,1)), &
