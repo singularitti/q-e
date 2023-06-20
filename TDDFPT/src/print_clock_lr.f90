@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2016 Quantum ESPRESSO group
+! Copyright (C) 2001-2019 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -15,8 +15,13 @@ SUBROUTINE print_clock_lr()
    USE io_global,        ONLY : stdout
    USE mp_world,         ONLY : mpime, root
    USE realus,           ONLY : real_space
-   USE lr_variables,     ONLY : davidson, eels
-   USE funct,            ONLY : dft_is_hybrid
+   USE lr_variables,     ONLY : davidson, eels, magnons
+   USE xc_lib,           ONLY : xclib_dft_is
+   !
+#if defined (__ENVIRON)
+   USE plugin_flags,        ONLY : use_environ
+   USE environ_base_module, ONLY : print_environ_clocks
+#endif
    !
    IMPLICIT NONE
    !
@@ -24,6 +29,8 @@ SUBROUTINE print_clock_lr()
    !
    IF (eels) THEN
       CALL print_clock( 'lr_eels_main' )
+   ELSEIF (magnons) THEN
+      CALL print_clock( 'lr_magnons_main' )
    ELSEIF (davidson) THEN
       CALL print_clock( 'lr_dav_main' )
    ELSE
@@ -78,12 +85,10 @@ SUBROUTINE print_clock_lr()
     CALL print_clock( 'addusdbec_nc' )
     CALL print_clock( 'lr_addusddens' )
     CALL print_clock( 'lr_addus_dvpsi' )
+    CALL print_clock( 'lr_compute_intq' )
    ENDIF
-   IF (eels) THEN
-      CALL print_clock( 'lr_sm1_psiq' )
-   ELSE
-      CALL print_clock( 'lr_sm1_psi' )
-   ENDIF
+   CALL print_clock( 'lr_sm1_initialize' )
+   CALL print_clock( 'lr_sm1_psi' )
    !
    IF (real_space) THEN
     WRITE( stdout, '(5X,"US routines, RS")' )
@@ -119,9 +124,11 @@ SUBROUTINE print_clock_lr()
    WRITE( stdout, * )
 #endif
    !
-   CALL plugin_clock()
+#if defined (__ENVIRON)
+   IF (use_environ) CALL print_environ_clocks()
+#endif
    !
-   IF (dft_is_hybrid()) THEN
+   IF (xclib_dft_is('hybrid')) THEN
     !
     WRITE( stdout, '(5X,"EXX routines")' )
     CALL print_clock( 'exx_grid' )

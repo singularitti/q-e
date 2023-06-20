@@ -15,7 +15,7 @@ SUBROUTINE d_matrix_so (dyj12, dyj32, dyj52, dyj72)
   !
   USE kinds, ONLY: DP
   USE symm_base, ONLY:  nsym, sr
-  USE spin_orb,   ONLY : rot_ylm
+  USE upf_spinorb,   ONLY : maxl => lmaxx, rot_ylm
   USE random_numbers, ONLY : randy
   USE matrix_inversion
   !
@@ -31,7 +31,7 @@ SUBROUTINE d_matrix_so (dyj12, dyj32, dyj52, dyj72)
   !
   !    here the local parameters
   !
-  INTEGER, PARAMETER :: maxl = 3, maxm = 2*maxl+1, &
+  INTEGER, PARAMETER :: maxm = 2*maxl+1, &
        maxlm = (maxl+1)*(maxl+1)
   INTEGER, PARAMETER :: maxmj = 2*maxl+2
   !
@@ -40,7 +40,7 @@ SUBROUTINE d_matrix_so (dyj12, dyj32, dyj52, dyj72)
   ! maxlm= number of l,m spherical harmonics for l <= maxl
   ! maxmj = number of mj components
   !
-  REAL(DP), PARAMETER :: eps = 1.0d-9
+  REAL(DP), PARAMETER :: eps = 1.0d-8
   !
   !   and the local variables
   !

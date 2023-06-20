@@ -9,12 +9,10 @@
 !-----------------------------------------------------------------------
 subroutine phq_summary
   !-----------------------------------------------------------------------
-  !
-  !    This routine writes on output the quantities which have been read
-  !    from the punch file, and the quantities computed in the phq_setup
-  !    file.
-  !
-  !    if iverbosity = 0 only a partial summary is done.
+  !! This routine writes on output the quantities which have been read
+  !! from the punch file, and the quantities computed in the 
+  !! \(\texttt{phq_setup}\) file.  
+  !! If \(\text{iverbosity}=0\) only a partial summary is done.
   !
   !
   USE kinds,         ONLY : DP
@@ -26,9 +24,8 @@ subroutine phq_summary
   USE gvect,         ONLY : gcutm, ngm
   USE gvecs,         ONLY : doublegrid, dual, gcutms, ngms
   USE fft_base,      ONLY : dffts
-  USE symm_base,     ONLY : s, sr, ftau, sname, t_rev
-  USE noncollin_module, ONLY : noncolin
-  USE spin_orb,      ONLY : lspinorb, domag
+  USE symm_base,     ONLY : s, sr, ft, sname, t_rev
+  USE noncollin_module, ONLY : noncolin, domag, lspinorb
   USE funct,         ONLY : write_dft_name
   USE run_info,      ONLY : title
   USE gamma_gamma,   ONLY : with_symmetry, nasr
@@ -44,7 +41,7 @@ subroutine phq_summary
   USE qpoint,        ONLY : xq
   USE lr_symm_base,  ONLY : irotmq, minus_q, nsymq
   USE constants,     ONLY : rytoev
-  USE ldaU_ph,       ONLY : effU
+  USE ldaU_lr,       ONLY : effU
   USE ldaU,          ONLY : lda_plus_u, Hubbard_U, Hubbard_J0, &
                             lda_plus_u_kind, is_hubbard
  
@@ -185,23 +182,19 @@ subroutine phq_summary
         IF (noncolin.and.domag) &
             WRITE(stdout,'(1x, "Time Reversal",i3)') t_rev(isym)
 
-        if (ftau (1, isym) .ne.0.or.ftau (2, isym) .ne.0.or.ftau (3, &
-             isym) .ne.0) then
-           ft1 = at (1, 1) * ftau (1, isym) / dfftp%nr1 + at (1, 2) * ftau ( &
-                2, isym) / dfftp%nr2 + at (1, 3) * ftau (3, isym) / dfftp%nr3
-           ft2 = at (2, 1) * ftau (1, isym) / dfftp%nr1 + at (2, 2) * ftau ( &
-                2, isym) / dfftp%nr2 + at (2, 3) * ftau (3, isym) / dfftp%nr3
-           ft3 = at (3, 1) * ftau (1, isym) / dfftp%nr1 + at (3, 2) * ftau ( &
-                2, isym) / dfftp%nr2 + at (3, 3) * ftau (3, isym) / dfftp%nr3
-           WRITE( stdout, '(1x,"cryst.",3x,"s(",i2,") = (",3(i6,5x), &
-                &                    " )    f =( ",f10.7," )")') isymq,  (s (1, &
-                & ipol, isym) , ipol = 1, 3) , DBLE (ftau (1, isym) )  / DBLE (dfftp%nr1)
-           WRITE( stdout, '(17x," (",3(i6,5x), &
-                &                    " )       ( ",f10.7," )")')  (s (2, ipol, &
-                &isym) , ipol = 1, 3) , DBLE (ftau (2, isym) )  / DBLE (dfftp%nr2)
-           WRITE( stdout, '(17x," (",3(i6,5x), &
-                &                    " )       ( ",f10.7," )"/)')  (s (3, ipol, &
-                & isym) , ipol = 1, 3) , DBLE (ftau (3, isym) )  / DBLE (dfftp%nr3)
+        if ( ft(1,isym)**2 + ft(2,isym)**2 + ft(3,isym)**2 > 1.0d-8 ) then
+           ft1 = at(1,1)*ft(1,isym) + at(1,2)*ft(2,isym) + at(1,3)*ft(3,isym) 
+           ft2 = at(2,1)*ft(1,isym) + at(2,2)*ft(2,isym) + at(2,3)*ft(3,isym) 
+           ft3 = at(3,1)*ft(1,isym) + at(3,2)*ft(2,isym) + at(3,3)*ft(3,isym)
+           WRITE(stdout, '(1x,"cryst.",3x,"s(",i2,") = (",3(i6,5x) &
+                &                    " )    f =( ",f10.7," )")') isymq,  & 
+                & (s(1,ipol,isym), ipol = 1, 3), ft(1,isym)
+           WRITE(stdout, '(17x," (",3(i6,5x), &
+                &                    " )       ( ",f10.7," )")')  & 
+                & (s(2,ipol,isym), ipol = 1, 3), ft(2,isym)
+           WRITE(stdout, '(17x," (",3(i6,5x), &
+                &                    " )       ( ",f10.7," )"/)') & 
+                &  (s(3,ipol,isym), ipol = 1, 3), ft(3,isym)
            WRITE( stdout, '(1x,"cart.",4x,"s(",i2,") = (",3f11.7, &
                 &                    " )    f =( ",f10.7," )")') isymq,  &
                 &  (sr (1, ipol,isym) , ipol = 1, 3) , ft1
@@ -299,7 +292,7 @@ subroutine phq_summary
   ENDIF
 
   WRITE( stdout, '(//5x,"Atomic displacements:")')
-  WRITE( stdout, '(5x,"There are ",i3," irreducible representations")') nirr
+  WRITE( stdout, '(5x,"There are ",i4," irreducible representations")') nirr
   imode0 = 0
   DO irr = 1, nirr
      IF (done_irr (irr)) then

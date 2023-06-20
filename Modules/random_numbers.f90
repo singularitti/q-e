@@ -8,6 +8,7 @@
 !----------------------------------------------------------------------------
 MODULE random_numbers
   !----------------------------------------------------------------------------
+  !! Module for random numbers generation.
   !
   USE kinds, ONLY : DP
   !
@@ -24,11 +25,10 @@ MODULE random_numbers
     !------------------------------------------------------------------------
     FUNCTION randy ( irand )
       !------------------------------------------------------------------------
-      !
-      ! x=randy(n): reseed with initial seed idum=n ( 0 <= n <= ic, see below)
-      !             if randy is not explicitly initialized, it will be
-      !             initialized with seed idum=0 the first time it is called
-      ! x=randy() : generate uniform real(DP) numbers x in [0,1]
+      !! * x=randy(n): reseed with initial seed \(\text{idum}=n\) ( 0 <= n <= ic, see below)
+      !!               if randy is not explicitly initialized, it will be
+      !!               initialized with seed \(\text{idum}=0\) the first time it is called;
+      !! * x=randy() : generate uniform REAL(DP) numbers x in [0,1].
       !
       REAL(DP) :: randy
       INTEGER, optional    :: irand
@@ -73,8 +73,7 @@ MODULE random_numbers
     !------------------------------------------------------------------------
     SUBROUTINE set_random_seed ( )
       !------------------------------------------------------------------------
-      !
-      ! poor-man random seed for randy
+      !! poor-man random seed for \(\texttt{randy}\).
       !
       INTEGER, DIMENSION (8) :: itime
       INTEGER :: iseed, irand
@@ -90,9 +89,8 @@ MODULE random_numbers
     !-----------------------------------------------------------------------
     FUNCTION gauss_dist_scal( mu, sigma )
       !-----------------------------------------------------------------------
-      !
-      ! ... this function generates a number taken from a normal
-      ! ... distribution of mean value \mu and variance \sigma
+      !! This function generates a number taken from a normal distribution of
+      !! mean value \(\text{mu}\) and variance \(\text{sigma}.
       !
       IMPLICIT NONE
       !
@@ -125,9 +123,8 @@ MODULE random_numbers
     !-----------------------------------------------------------------------
     FUNCTION gauss_dist_cmplx( mu, sigma )
       !-----------------------------------------------------------------------
-      !
-      ! ... this function generates a number taken from a normal
-      ! ... distribution of mean value \mu and variance \sigma
+      !! This function generates a number taken from a normal distribution of
+      !! mean value \(\text{mu}\) and variance \(\text{sigma}\).
       !
       IMPLICIT NONE
       !
@@ -160,9 +157,8 @@ MODULE random_numbers
     !-----------------------------------------------------------------------
     FUNCTION gauss_dist_vect( mu, sigma, dim )
       !-----------------------------------------------------------------------
-      !
-      ! ... this function generates an array of numbers taken from a normal
-      ! ... distribution of mean value \mu and variance \sigma
+      !! This function generates an array of numbers taken from a normal
+      !! distribution of mean value \(\text{mu}\) and variance \(\text{sigma}\).
       !
       IMPLICIT NONE
       !
@@ -204,4 +200,85 @@ MODULE random_numbers
       !
     END FUNCTION gauss_dist_vect
     !
+    !-----------------------------------------------------------------------
+    FUNCTION gamma_dist (ialpha)
+      !-----------------------------------------------------------------------
+      !! Gamma-distributed random number, implemented as described in
+      !! Numerical recipes (Press, Teukolsky, Vetterling, Flannery).
+      !
+      IMPLICIT NONE
+      INTEGER, INTENT(IN) :: ialpha
+      REAL(DP) gamma_dist
+      INTEGER j
+      REAL(DP) am,e,s,v1,v2,x,y
+      REAL(DP), external :: ran1
+      !
+      IF ( ialpha < 1 ) CALL errore('gamma_dist',  'bad alpha in gamma_dist', 1)
+      !
+      ! For small  alpha, it is more efficient to calculate Gamma as the waiting time
+      ! to the alpha-th event oin a Poisson random process of unit mean.
+      ! Define alpha as small for 0 < alpha < 6:
+      IF ( ialpha < 6 ) THEN
+        !
+        x = 1.0D0
+        DO j=1,ialpha
+          x = x * randy()
+        ENDDO
+        x = -LOG(x)
+      ELSE
+        DO
+          v1 = 2.0D0*randy()-1.0D0
+          v2 = 2.0D0*randy()-1.0D0
+          !
+          ! need to get this condition met:
+          IF ( v1**2+v2**2 > 1.0D0) CYCLE
+          !
+          y = v2 / v1
+          am = ialpha - 1
+          s = sqrt(2.0D0 * am + 1.0D0)
+          x = s * y + am
+          !
+          IF ( x <= 0.) CYCLE
+          !
+          e = (1.0D0+y**2)* exp( am * log( x / am ) - s * y)
+          !
+          IF (randy() > e) THEN
+            CYCLE
+          ELSE
+            EXIT
+          ENDIF
+        ENDDO
+      ENDIF
+    !
+    gamma_dist=x
+    !
+  ENDFUNCTION gamma_dist
+  !
+  !-----------------------------------------------------------------------
+  FUNCTION sum_of_gaussians2(inum_gaussians)
+    !-----------------------------------------------------------------------
+    !! Returns the sum of inum independent gaussian noises squared, i.e. the result
+    !! is equivalent to summing the square of the return values of inum calls
+    !! to \(\texttt{gauss_dist}\).
+    !
+    IMPLICIT NONE
+    INTEGER, INTENT(IN) :: inum_gaussians
+    !
+    REAL(DP) sum_of_gaussians2
+    !
+    IF ( inum_gaussians < 0 ) THEN
+      CALL errore('sum_of_gaussians2',  'negative number of gaussians', 1)
+    ELSEIF ( inum_gaussians == 0 ) THEN
+      sum_of_gaussians2 = 0.0D0
+    ELSEIF ( inum_gaussians == 1 ) THEN
+      sum_of_gaussians2 = gauss_dist( 0.0D0, 1.0D0 )**2
+    ELSEIF( MODULO(inum_gaussians,2) == 0 ) THEN
+      sum_of_gaussians2 = 2.0 * gamma_dist( inum_gaussians/2 )
+    ELSE
+      sum_of_gaussians2 = 2.0 * gamma_dist((inum_gaussians-1)/2) + &
+                gauss_dist( 0.0D0, 1.0D0 )**2
+    ENDIF
+    !
+  ENDFUNCTION sum_of_gaussians2
+  !
 END MODULE random_numbers

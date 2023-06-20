@@ -11,10 +11,11 @@
 ! ... code ported from PW to CP by Federico Zipoli
 !
 SUBROUTINE makov_payne(etot)
-!
+  !! Makov Payne correction for CP.
+  !
 ! CP Modules
   USE kinds,             ONLY : DP
-  USE ions_base,         ONLY : nat, zv, ityp, ind_srt
+  USE ions_base,         ONLY : nat, zv, ityp
   USE ions_positions,    ONLY : tau0
   USE io_global,         ONLY : stdout, ionode, ionode_id
   USE constants,         ONLY : pi, autoev, au_debye
@@ -64,7 +65,7 @@ REAL(KIND=DP), ALLOCATABLE:: rhodist2(:)
   & rgx(dfftp%nr1x),rgy(dfftp%nr2x),rgz(dfftp%nr3x),zvv(nat) )
  !
  DO i=1,nat
-  zvv(i)=zv(ityp(ind_srt(i))) 
+  zvv(i)=zv(ityp(i)) 
   DO j=1,3
    r(i,j)=tau0(j,i)
   ENDDO

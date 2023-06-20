@@ -23,16 +23,18 @@ SUBROUTINE local_dos_mag(spin_component, kpoint, kband, raux)
   USE gvecs,                ONLY : doublegrid
   USE klist,                ONLY : nks, xk, ngk, igk_k, nkstot
   USE scf,                  ONLY : rho
-  USE io_files,             ONLY : iunwfc, nwordwfc
+  USE io_files,             ONLY : restart_dir
   USE uspp,                 ONLY : nkb, vkb, becsum, nhtol, nhtoj, indv, okvan
   USE uspp_param,           ONLY : upf, nh, nhm
-  USE wavefunctions, ONLY : evc, psic_nc
-  USE noncollin_module,     ONLY : noncolin, npol
-  USE spin_orb,             ONLY : lspinorb, fcoef
+  USE wavefunctions,        ONLY : evc, psic_nc
+  USE noncollin_module,     ONLY : npol
+  USE upf_spinorb,          ONLY : fcoef
   USE wvfct,                ONLY : nbnd, npwx
   USE becmod,               ONLY : calbec
   USE mp_pools,             ONLY : my_pool_id, npool, inter_pool_comm
   USE mp,                   ONLY : mp_sum
+  USE pw_restart_new,       ONLY : read_collected_wfc
+  USE uspp_init,            ONLY : init_us_2
   !
   IMPLICIT NONE
   !
@@ -65,7 +67,7 @@ SUBROUTINE local_dos_mag(spin_component, kpoint, kband, raux)
   w1=1.D0/omega
 
   ALLOCATE( becp_nc( nkb, npol, nbnd ) )
-  IF (lspinorb) ALLOCATE(be1(nhm,2), be2(nhm,2))
+  IF ( ANY(upf(1:ntyp)%has_so) ) ALLOCATE(be1(nhm,2), be2(nhm,2))
   !
   ! ... here we compute, for the specified k-point and band,
   ! ... the magnetization for the specified spin component
@@ -79,7 +81,7 @@ SUBROUTINE local_dos_mag(spin_component, kpoint, kband, raux)
   IF ( ik > 0 ) THEN
   !
      npw = ngk(ik)
-     CALL davcio (evc, 2*nwordwfc, iunwfc, ik, - 1)
+     CALL read_collected_wfc ( restart_dir(), ik, evc )
      IF (nkb > 0) CALL init_us_2 (npw, igk_k(1,ik), xk (1, ik), vkb)
      CALL calbec ( npw, vkb, evc, becp_nc)
      !
@@ -273,7 +275,7 @@ SUBROUTINE local_dos_mag(spin_component, kpoint, kband, raux)
   CALL mp_sum( raux, inter_pool_comm )
 #endif
   !
-  IF (lspinorb) DEALLOCATE(be1, be2)
+  IF ( ANY(upf(1:ntyp)%has_so) ) DEALLOCATE(be1, be2)
   DEALLOCATE( becp_nc )
   RETURN
   !

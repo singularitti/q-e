@@ -5,40 +5,73 @@
 ! in the root directory of the present distribution,
 ! or http://www.gnu.org/copyleft/gpl.txt .
 !
-   SUBROUTINE compute_rho(rho,rhoout,segni,nrxx)
-!
-!   This subroutine diagonalizes the spin density matrix and gives as output
-!   the spin up and spin down components of the charge
-!   If lsign is true up and dw are with respect to the fixed quantization
-!   axis ux, otherwise rho+|m| is always rhoup and rho-|m| is always
-!   rhodw
-!
-   USE kinds, ONLY : dp
+!------------------------------------------------------------------------------
+SUBROUTINE compute_rho( rho, rhoout, segni, nrxx )
+   !--------------------------------------------------------------------------
+   !! This subroutine diagonalizes the spin density matrix and gives as output
+   !! the spin-up and spin-down components of the charge.  
+   !! If \(\text{lsign}\) is .TRUE. up and down are with respect to the fixed 
+   !! quantization axis ux, otherwise \(\text{rho}+|m|\) is always rho-up and
+   !! \(\text{rho}-|m|\) is always rho-down.
+   !
+   USE kinds,            ONLY : DP
    USE noncollin_module, ONLY : lsign, ux
+   !
    IMPLICIT NONE
-   INTEGER :: nrxx  ! input: the dimension of the mesh
-         
-   REAL(DP), INTENT(IN) ::  rho(nrxx,4)
+   !
+   INTEGER :: nrxx
+   !! input: the dimension of the mesh
+   REAL(DP), INTENT(IN) :: rho(nrxx,4)
+   !! the four components of the charge 
    REAL(DP), INTENT(OUT) :: rhoout(nrxx,2)
+   !! the spin up and spin down charge
    REAL(DP), INTENT(OUT) :: segni(nrxx)
-                 ! input: the four components of the charge 
-                 ! output: the spin up and spin down charge
-                 ! output: the orientation when needed
-   REAL(DP) :: amag
-   INTEGER :: ir           ! counter on mesh points
-
-   segni=1.0_DP
+   !! the orientation when needed
+   !
+   ! ... local variables
+   !
+   REAL(DP) :: ux1, ux2, ux3, amag
+   INTEGER :: ir ! counter on mesh points
+   !
+   !$acc data present_or_copyin( rho ) present_or_copyout( rhoout, segni )
+   !
    IF (lsign) THEN
-      DO ir=1,nrxx
-         segni(ir)=SIGN(1.0_DP,rho(ir,2)*ux(1)+rho(ir,3)*ux(2)+rho(ir,4)*ux(3))
+      !
+      ux1 = ux(1) ; ux2 = ux(2) ; ux3 = ux(3)
+      !
+#if !defined(_OPENACC)
+      !$omp parallel do default(shared) private(ir, amag)
+#else
+      !$acc parallel loop
+#endif
+      DO ir = 1, nrxx 
+         segni(ir) = SIGN(1.0_DP,rho(ir,2)*ux1+rho(ir,3)*ux2+rho(ir,4)*ux3)
+         amag = SQRT(rho(ir,2)**2+rho(ir,3)**2+rho(ir,4)**2)
+         rhoout(ir,1) = 0.5d0*(rho(ir,1)+segni(ir)*amag)
+         rhoout(ir,2) = 0.5d0*(rho(ir,1)-segni(ir)*amag)
       ENDDO
-   ENDIF
-
-   DO ir=1,nrxx
-      amag=SQRT(rho(ir,2)**2+rho(ir,3)**2+rho(ir,4)**2)
-      rhoout(ir,1)=0.5d0*(rho(ir,1)+segni(ir)*amag)
-      rhoout(ir,2)=0.5d0*(rho(ir,1)-segni(ir)*amag)
-   ENDDO
-
-   RETURN
+#if !defined(_OPENACC)
+      !$omp end parallel do
+#endif
+    ELSE
+#if !defined(_OPENACC)
+      !$omp parallel do default(shared) private(ir, amag)
+#else
+      !$acc parallel loop
+#endif
+      DO ir =1, nrxx 
+         segni(ir) = 1.0_DP
+         amag = SQRT(rho(ir,2)**2+rho(ir,3)**2+rho(ir,4)**2)
+         rhoout(ir,1) = 0.5d0*(rho(ir,1) + amag)
+         rhoout(ir,2) = 0.5d0*(rho(ir,1) - amag)
+      ENDDO
+#if !defined(_OPENACC)
+      !$omp end parallel do 
+#endif
+    ENDIF
+    !
+    !$acc end data
+    !
+    RETURN
+    !
 END SUBROUTINE compute_rho

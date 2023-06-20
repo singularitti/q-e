@@ -7,41 +7,52 @@
 !
 !------------------------------------------------------------------------------!
   MODULE ions_nose
-!------------------------------------------------------------------------------!
-
+      !------------------------------------------------------------------------------!
+      !! The present code allows one to use "massive" Nose-Hoover chains:  
+      !! TOBIAS DJ, MARTYNA GJ, KLEIN ML  
+      !! JOURNAL OF PHYSICAL CHEMISTRY 97 (49): 12959-12966 DEC 9 1993.
+      !
       USE kinds, ONLY: DP
-!
+      !
       IMPLICIT NONE
-! Some comments are in order on how Nose-Hoover chains work here (K.N. Kudin)
-! the present code allows one to use "massive" Nose-Hoover chains:
-! TOBIAS DJ, MARTYNA GJ, KLEIN ML
-! JOURNAL OF PHYSICAL CHEMISTRY 97 (49): 12959-12966 DEC 9 1993
-!
-! one chain for the whole system is specified by nhptyp=0 (or nothing)
-! currently input options allow one chain per atomic type (nhptyp=1),
-! one chain per atom (nhptyp=2), and fancy stuff with nhptyp=3 (& nhgrp)
-!
-! nhpdim is the total number of the resulting NH chains
-! nhpend is 1 if there is a chain above all chains, otherwise it is 0
-! nhpbeg is usually 0, however, if using groups (nhptyp = 3), it might
-! be desirable to have atoms with uncontrolled temperature, so then
-! nhpbeg becomes 1, and all the "uncontrolled" atoms are assigned to the
-! 1st thermostat that is always zero in velocity and so it does not
-! affect ionic motion
-! array atm2nhp(1:nat) gives the chain number from the atom list (which
-! is sorted by type)
-! anum2nhp is the number of degrees of freedom per chain (now just 3*nat_i)
-! ekin2nhp is the kinetic energy of the present chain
-! gkbt2nhp are the NH chain parameters
-! qnp are the chain masses, qnp_ is a temporary array for now
-! see subroutine ions_nose_allocate on what are the dimensions of these
-! variables
-!
-      INTEGER   :: nhpcl=1, ndega, nhpdim=1, nhptyp=0, nhpbeg=0, nhpend=0
+      !
+      ! Some comments are in order on how Nose-Hoover chains work here (K.N. Kudin)
+      !
+      INTEGER :: nhpdim=1
+      !! the total number of the resulting NH chains
+      INTEGER :: nhpend=0
+      !! it is 1 if there is a chain above all chains, otherwise it is 0
+      INTEGER :: nhpbeg=0
+      !! it is usually 0, however, if using groups (nhptyp = 3), it might
+      !! be desirable to have atoms with uncontrolled temperature, so then
+      !! nhpbeg becomes 1, and all the "uncontrolled" atoms are assigned to the
+      !! 1st thermostat that is always zero in velocity and so it does not
+      !! affect ionic motion.
+      INTEGER :: nhptyp=0
+      !! one chain for the whole system is specified by nhptyp=0 (or nothing)
+      !! currently input options allow one chain per atomic type (nhptyp=1),
+      !! one chain per atom (nhptyp=2), and fancy stuff with nhptyp=3 (& nhgrp).
+      !
+      INTEGER :: nhpcl=1, ndega 
+      !
+      ! see subroutine ions_nose_allocate on what are the dimensions of these
+      ! variables
+      !
       INTEGER, ALLOCATABLE   :: atm2nhp(:)
+      !! gives the chain number from the atom list (which is sorted by type)
       INTEGER, ALLOCATABLE   :: anum2nhp(:)
+      !! the number of degrees of freedom per chain (now just 3*nat_i)
+      REAL(DP), ALLOCATABLE :: ekin2nhp(:)
+      !! the kinetic energy of the present chain
+      REAL(DP), ALLOCATABLE :: gkbt2nhp(:)
+      !! the NH chain parameters
+      REAL(DP), ALLOCATABLE :: qnp(:)
+      !! the chain masses
+      REAL(DP), ALLOCATABLE :: qnp_(:)
+      !! a temporary array
+      !
       REAL(DP), ALLOCATABLE :: vnhp(:), xnhp0(:), xnhpm(:), xnhpp(:), &
-      ekin2nhp(:), gkbt2nhp(:), scal2nhp(:), qnp(:), qnp_(:), fnosep(:)
+       scal2nhp(:), fnosep(:)
 
       REAL(DP) :: gkbt = 0.0_DP
       REAL(DP) :: kbt = 0.0_DP
@@ -57,7 +68,7 @@
     use ions_base,      only: ndofp, tions_base_init, nsp, nat, na, amass, ityp
     real(DP), intent(in)  :: tempw_ , fnosep_(:), fnhscl_(:) 
     integer, intent(in) :: nhpcl_ , nhptyp_ , ndega_ , nhgrp_(:)
-    integer :: i, j, iat, is, ia
+    integer :: i, j, is, ia
     REAL(DP) :: amass_mean
 
     IF( .NOT. tions_base_init ) &
@@ -76,12 +87,8 @@
           nhptyp = 1
           if (nhptyp_.gt.0) nhpend = 1
           nhpdim = nsp
-          iat = 0
-          do is=1,nsp
-             do ia=1,na(is)
-                iat = iat+1
-                atm2nhp(iat) = is
-             enddo
+          do ia=1,nat
+             atm2nhp(ia) = ityp(ia)
           enddo
        elseif (abs(nhptyp_).eq.2) then
           nhptyp = 2
@@ -123,7 +130,6 @@
 
       ! count the number of atoms per thermostat and set the value
       anum2nhp = 0
-      iat = 0
       ! Here we shall check if the scaling factors are provided
       If (maxval(fnhscl_(1:nsp)).lt.0.0d0) then
          scal2nhp = DBLE(ndega)/DBLE(3*nat)
@@ -131,13 +137,11 @@
          scal2nhp = -1.0_DP
       endif
       !
-      do is=1,nsp
-         do ia=1,na(is)
-            iat = iat+1
-            anum2nhp(atm2nhp(iat)) = anum2nhp(atm2nhp(iat)) + 3
-            if (scal2nhp(atm2nhp(iat)).lt.0.0_DP) &
-                 scal2nhp(atm2nhp(iat)) = fnhscl_(is)
-         enddo
+      do ia=1,nat
+         is = ityp(ia)
+         anum2nhp(atm2nhp(ia)) = anum2nhp(atm2nhp(ia)) + 3
+         if (scal2nhp(atm2nhp(ia)).lt.0.0_DP) &
+              scal2nhp(atm2nhp(ia)) = fnhscl_(is)
       enddo
       if (nhpend.eq.1) anum2nhp(nhpdim) = nhpdim - 1 - nhpbeg
       ! set gkbt2nhp for each thermostat
@@ -266,12 +270,12 @@
 
   subroutine set_atmnhp(nhgrp,atm2nhp,nhpdim,nhpbeg)
     !
-    use ions_base,      only: nsp, nat, na
+    use ions_base,      only: nsp, nat, ityp
     IMPLICIT NONE
     integer, intent(in) :: nhgrp(:)
     integer, intent(out) :: nhpdim, nhpbeg, atm2nhp(:)
     !
-    integer :: i,iat,is,ia,igrpmax,ith
+    integer :: i,is,ia,igrpmax,ith
     INTEGER, ALLOCATABLE   :: indtmp(:)
     !
     ! find maximum group
@@ -295,19 +299,16 @@
        endif
     enddo
     ! assign thermostats to atoms depending on what is requested
-    iat = 0
-    do is=1,nsp
-       do ia=1,na(is)
-          iat = iat+1
-          if (nhgrp(is).gt.0) then
-             atm2nhp(iat) = indtmp(nhgrp(is))
-          elseif (nhgrp(is).eq.0) then
-             ith = ith + 1
-             atm2nhp(iat) = ith
-          else
-             atm2nhp(iat) = 1
-          endif
-       enddo
+    do ia=1,nat
+       is=ityp(ia)
+       if (nhgrp(is).gt.0) then
+          atm2nhp(ia) = indtmp(nhgrp(is))
+       elseif (nhgrp(is).eq.0) then
+          ith = ith + 1
+          atm2nhp(ia) = ith
+       else
+          atm2nhp(ia) = 1
+       endif
     enddo
     nhpdim = ith
     deallocate(indtmp)

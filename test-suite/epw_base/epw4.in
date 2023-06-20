@@ -5,40 +5,33 @@
   outdir      = './'
 
   iverbosity  = 0
-
-  band_plot   = .true.
-
   elph        = .true.
-  kmaps       = .true.
-  epbwrite    = .false.
-  epbread     = .false.
-
   etf_mem     = 0
+  vme         = 'dipole'
 
   epwwrite    = .false.
   epwread     = .true.
 
   nbndsub     =  4
-  nbndskip    =  0
 
   wannierize  = .false.
   num_iter    = 300
   iprint      = 2
   dis_win_max = 12
   dis_froz_max= 7
-  proj(1)     = 'f=0,0,0:l=-3'   
+  proj(1)     = 'f=0,0,0:l=-3'
 
   elecselfen  = .true.
   phonselfen  = .false.
   a2f         = .false.
 
-  fsthick     = 15 ! eV 
-  eptemp      = 300 ! K (same as PRB 76, 165108)
+  fsthick     = 15 ! eV
+  temps       = 300 ! K (same as PRB 76, 165108)
   degaussw    = 1.0 ! eV
 
   dvscf_dir   = './save/'
-  filukk      = './diam.ukk'
 
+  band_plot   = .true.
   filkf       = 'path.dat'
   filqf       = 'path.dat'
 
@@ -50,9 +43,3 @@
   nq2         = 3
   nq3         = 3
  /
-      4 cartesian
-  0.000000000000   0.000000000000   0.000000000000  
- -0.333333333333   0.333333333333  -0.333333333333  
-  0.000000000000   0.666666666667   0.000000000000  
-  0.666666666667   0.000000000000   0.666666666667  
-

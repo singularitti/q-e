@@ -8,10 +8,11 @@
 ! This file holds XSF (=Xcrysden Structure File) utilities.
 ! Routines written by Tone Kokalj on Mon Jan 27 18:51:17 CET 2003
 !
-! -------------------------------------------------------------------
-!   this routine writes the crystal structure in XSF format
-! -------------------------------------------------------------------
+!-------------------------------------------------------------------
 SUBROUTINE xsf_struct (alat, at, nat, tau, atm, ityp, ounit)
+  !-------------------------------------------------------------------
+  !! This routine writes the crystal structure in XSF format.
+  !
   USE kinds, ONLY : DP
   USE constants, ONLY : BOHR_RADIUS_ANGS
   IMPLICIT NONE
@@ -46,12 +47,14 @@ END SUBROUTINE xsf_struct
 
 
 
-! -------------------------------------------------------------------
-!   this routine writes the 3D scalar field (i.e. uniform mesh of points)
-!   in XSF format using the FFT mesh (i.e. fast write)
-! -------------------------------------------------------------------
+
+!-------------------------------------------------------------------
 SUBROUTINE xsf_fast_datagrid_3d &
      (rho, nr1, nr2, nr3, nr1x, nr2x, nr3x, at, alat, ounit)
+  !-------------------------------------------------------------------
+  !! This routine writes the 3D scalar field (i.e. uniform mesh of points)
+  !! in XSF format using the FFT mesh (i.e. fast write).
+  !
   USE kinds, ONLY : DP
   USE constants, ONLY : BOHR_RADIUS_ANGS
   IMPLICIT NONE
@@ -64,7 +67,7 @@ SUBROUTINE xsf_fast_datagrid_3d &
   ! XSF scalar-field header
   WRITE(ounit,'(a)') 'BEGIN_BLOCK_DATAGRID_3D'
   WRITE(ounit,'(a)') '3D_PWSCF'
-  WRITE(ounit,'(a)') 'DATAGRID_3D_UNKNOWN'
+  WRITE(ounit,'(a)') 'BEGIN_DATAGRID_3D_UNKNOWN'
 
   ! number of points in each direction
   WRITE(ounit,*) nr1+1, nr2+1, nr3+1

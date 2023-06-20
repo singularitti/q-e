@@ -48,14 +48,17 @@ CONTAINS
   INTEGER         :: iw,ik,i,ierr
 
   !
-  ! check on the number of bands: we need to include empty bands in order to allow
-  ! to write the transitions
+  ! check on the number of bands: we need to include empty bands in order
+  ! to compute the transitions
   !
   IF ( nspin == 1) full_occ = 2.0d0
   IF ( nspin == 2 .OR. nspin == 4) full_occ = 1.0d0
   !
-  IF ( REAL(nbnd,DP)*full_occ <= nelec ) CALL errore('epsilon', 'bad band number', 1)
-
+  IF ( nspin == 2 ) THEN
+     IF ( nbnd*full_occ <= nelec/2.d0 ) CALL errore('epsilon', 'bad band number', 2)
+  ELSE
+     IF ( nbnd*full_occ <= nelec ) CALL errore('epsilon', 'bad band number', 1)
+  ENDIF
   !
   ! USPP are not implemented (dipole matrix elements are not trivial at all)
   !
@@ -83,7 +86,7 @@ CONTAINS
   DO ik = 2, nks
      !
      IF ( abs( wk(1) - wk(ik) ) > 1.0d-8 ) &
-        CALL errore('grid_build','non unifrom kpt grid', ik )
+        CALL errore('grid_build','non uniform kpt grid', ik )
      !
   ENDDO
   !
@@ -100,7 +103,7 @@ CONTAINS
   ! set the energy grid
   !
   IF ( metalcalc .AND. ABS(wmin) <= 0.001d0 ) wmin=0.001d0
-  IF ( ionode ) WRITE(stdout,"(5x,a,f12.6)") "metalling system: redefining wmin = ", wmin  
+  IF ( ionode ) WRITE(stdout,"(5x,a,f12.6)") "metallic system: redefining wmin = ", wmin  
   !
   alpha = (wmax - wmin) / REAL(nw-1, KIND=DP)
   !
@@ -127,8 +130,59 @@ END SUBROUTINE grid_build
 END SUBROUTINE grid_destroy
 
 END MODULE grid_module
-
-
+!
+MODULE eps_writer
+!------------------------------
+  IMPLICIT NONE
+  !
+  PRIVATE
+  !
+  PUBLIC :: eps_writetofile
+  !
+CONTAINS
+!
+!--------------------------------------------------------------------
+SUBROUTINE eps_writetofile(namein,desc,nw,wgrid,ncol,var,desc2)
+  !------------------------------------------------------------------
+  !
+  USE kinds,          ONLY : DP
+  USE io_files,       ONLY : prefix, tmp_dir
+  !
+  IMPLICIT NONE
+  !
+  CHARACTER(LEN=*),   INTENT(IN)           :: namein
+  CHARACTER(LEN=*),   INTENT(IN)           :: desc
+  INTEGER,            INTENT(IN)           :: nw, ncol
+  REAL(DP),           INTENT(IN)           :: wgrid(nw)
+  REAL(DP),           INTENT(IN)           :: var(ncol,nw)
+  CHARACTER(LEN=*),   INTENT(IN), OPTIONAL :: desc2
+  !
+  CHARACTER(256) :: str
+  INTEGER        :: iw
+  !
+  str = TRIM(namein) // "_" // TRIM(prefix) // ".dat"
+  OPEN(40,FILE=TRIM(str))
+  !
+  WRITE(40,"(a)") "# "// TRIM(desc)
+  !
+  IF (PRESENT(desc2)) THEN
+    WRITE(40, "(a)") "# "// TRIM(desc2)
+  ELSE
+    WRITE(40,"(a)") "#"
+  END IF
+  !
+  DO iw = 1, nw
+     !
+     WRITE(40,"(10f15.9)") wgrid(iw), var(1:ncol,iw)
+     !
+  ENDDO
+  !
+  CLOSE(40)
+  !
+END SUBROUTINE eps_writetofile
+!
+END MODULE eps_writer
+!
 !------------------------------
 PROGRAM epsilon
 !------------------------------
@@ -177,6 +231,7 @@ PROGRAM epsilon
   ! local variables
   !
   INTEGER :: ios
+  LOGICAL :: needwf = .TRUE.
 
 !---------------------------------------------
 ! program body
@@ -194,7 +249,8 @@ PROGRAM epsilon
   calculation  = 'eps'
   prefix       = 'pwscf'
   shift        = 0.0d0
-  outdir       = './'
+  CALL get_environment_variable( 'ESPRESSO_TMPDIR', outdir )
+  IF ( trim( outdir ) == ' ' ) outdir = './'
   intersmear   = 0.136
   wmin         = 0.0d0
   wmax         = 30.0d0
@@ -255,9 +311,7 @@ PROGRAM epsilon
   !
   IF (ionode) WRITE( stdout, "( 5x, 'Reading PW restart file...' ) " )
 
-  CALL read_file
-  CALL openfil_pp
-
+  CALL read_file_new( needwf )
   !
   ! few conversions
   !
@@ -266,7 +320,7 @@ PROGRAM epsilon
 
   IF (lgauss .or. ltetra) THEN
       metalcalc=.TRUE.
-      IF (ionode) WRITE( stdout, "( 5x, 'The system is a metal...' ) " )
+      IF (ionode) WRITE( stdout, "( 5x, 'The system is a metal (occupations are not fixed)...' ) " )
   ELSE
       IF (ionode) WRITE( stdout, "( 5x, 'The system is a dielectric...' ) " )
   ENDIF
@@ -336,6 +390,7 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
   USE io_global,            ONLY : ionode, stdout
   !
   USE grid_module,          ONLY : alpha, focc, full_occ, nw, wgrid, grid_destroy
+  USE eps_writer,           ONLY : eps_writetofile
   USE mp_pools,             ONLY : inter_pool_comm
   USE mp,                   ONLY : mp_sum
   !
@@ -353,7 +408,7 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
   INTEGER       :: i, ik, iband1, iband2,is
   INTEGER       :: iw, iwp, ierr
   REAL(DP)      :: etrans, const, w, renorm(3)
-  CHARACTER(128):: desc(4)
+  CHARACTER(128):: desc(4), desc2
   !
   REAL(DP),    ALLOCATABLE :: epsr(:,:), epsi(:,:), epsrc(:,:,:), epsic(:,:,:)
   REAL(DP),    ALLOCATABLE :: ieps(:,:), eels(:,:), iepsc(:,:,:), eelsc(:,:,:)
@@ -520,11 +575,13 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
         ! write results on data files
         !
         desc(1) = "energy grid [eV]     epsr_x  epsr_y  epsr_z"
+        WRITE(desc2, "('plasmon frequences [eV]: ',3f15.9)") renorm (:)
+        !
         desc(2) = "energy grid [eV]     epsi_x  epsi_y  epsi_z"
         desc(3) = "energy grid [eV]  eels components [arbitrary units]"
         desc(4) = "energy grid [eV]     ieps_x  ieps_y  ieps_z"
         !
-        CALL eps_writetofile("epsr",desc(1),nw,wgrid,3,epsr)
+        CALL eps_writetofile("epsr",desc(1),nw,wgrid,3,epsr,desc2)
         CALL eps_writetofile("epsi",desc(2),nw,wgrid,3,epsi)
         CALL eps_writetofile("eels",desc(3),nw,wgrid,3,eels)
         CALL eps_writetofile("ieps",desc(4),nw,wgrid,3,ieps)
@@ -550,6 +607,7 @@ SUBROUTINE jdos_calc ( smeartype, intersmear, nbndmin, nbndmax, shift, nspin )
   USE klist,                ONLY : nks
   USE io_global,            ONLY : ionode, stdout
   USE grid_module,          ONLY : alpha, focc, nw, wgrid
+  USE eps_writer,           ONLY : eps_writetofile
   !
   IMPLICIT NONE
 
@@ -1064,10 +1122,11 @@ SUBROUTINE dipole_calc( ik, dipole_aux, metalcalc, nbndmin, nbndmax )
   !
   USE kinds,                ONLY : DP
   USE wvfct,                ONLY : nbnd, npwx
-  USE wavefunctions, ONLY : evc
+  USE wavefunctions,        ONLY : evc
   USE klist,                ONLY : xk, ngk, igk_k
   USE gvect,                ONLY : ngm, g
-  USE io_files,             ONLY : nwordwfc, iunwfc
+  USE io_files,             ONLY : restart_dir
+  USE pw_restart_new,       ONLY : read_collected_wfc
   USE grid_module,          ONLY : focc, full_occ
   USE mp_bands,             ONLY : intra_bgrp_comm
   USE mp,                   ONLY : mp_sum
@@ -1091,7 +1150,7 @@ SUBROUTINE dipole_calc( ik, dipole_aux, metalcalc, nbndmin, nbndmax )
   !
   ! read wfc for the given kpt
   !
-  CALL davcio (evc, 2*nwordwfc, iunwfc, ik, - 1)
+  CALL read_collected_wfc ( restart_dir(), ik, evc )
   !
   ! compute matrix elements
   !
@@ -1156,39 +1215,3 @@ SUBROUTINE dipole_calc( ik, dipole_aux, metalcalc, nbndmin, nbndmax )
   CALL stop_clock( 'dipole_calc' )
   !
 END SUBROUTINE dipole_calc
-
-
-!--------------------------------------------------------------------
-SUBROUTINE eps_writetofile(namein,desc,nw,wgrid,ncol,var)
-  !------------------------------------------------------------------
-  !
-  USE kinds,          ONLY : DP
-  USE io_files,       ONLY : prefix, tmp_dir
-  !
-  IMPLICIT NONE
-  !
-  CHARACTER(LEN=*),   INTENT(IN) :: namein
-  CHARACTER(LEN=*),   INTENT(IN) :: desc
-  INTEGER,            INTENT(IN) :: nw, ncol
-  REAL(DP),           INTENT(IN) :: wgrid(nw)
-  REAL(DP),           INTENT(IN) :: var(ncol,nw)
-  !
-  CHARACTER(256) :: str
-  INTEGER        :: iw
-  
-  str = TRIM(namein) // "_" // TRIM(prefix) // ".dat"
-  OPEN(40,FILE=TRIM(str))
-  ! 
-  WRITE(40,"(a)") "# "// TRIM(desc)
-  WRITE(40,"(a)") "#"
-  !
-  DO iw = 1, nw
-     !     
-     WRITE(40,"(10f15.9)") wgrid(iw), var(1:ncol,iw)
-     !
-  ENDDO
-  !
-  CLOSE(40)
-  !
-END SUBROUTINE eps_writetofile
-

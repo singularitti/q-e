@@ -1,4 +1,4 @@
-# Copyright (C) 2001-2018 Quantum ESPRESSO group
+# Copyright (C) 2001-2022 Quantum ESPRESSO group
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -6,12 +6,12 @@
 # of the License. See the file `License' in the root directory
 # of the present distribution.
 
-AC_INIT(ESPRESSO, 6.4, , espresso)
+AC_INIT(ESPRESSO, 7.2, , espresso)
 
 AC_PREREQ(2.64)
 AC_CONFIG_MACRO_DIR([m4/])
 
-# Initialize variables, filling with one comes from the environment...
+# Initialize variables, filling with what comes from the environment...
 X_AC_QE_DEFAULT_ENV()
 
 # configure for current directory by default
@@ -26,8 +26,8 @@ X_AC_QE_ARCH()
 # Add all needed -D options to try_dflags
 try_dflags=""
 
-# "-I../include" is required by IOTK ...
-try_iflags="-I\$(TOPDIR)/include -I\$(TOPDIR)/FoX/finclude -I\$(TOPDIR)/S3DE/iotk/include/"
+# Add needed include directories
+try_iflags="-I. -I\$(TOPDIR)/include"
 
 # Checking archiver...
 X_AC_QE_AR()
@@ -35,20 +35,14 @@ X_AC_QE_AR()
 # Checking OpenMP...
 X_AC_QE_OPENMP()
 
-# Checking OpenMP...
-X_AC_QE_CUDA()
+AC_LANG_PUSH(Fortran) 
+AC_FC_SRCEXT(f90) 
 
 # Checking MPIF90...
 X_AC_QE_MPIF90()
 
-# Check environ...
-X_AC_QE_ENVIRON()
-
 # Checking CC...
 X_AC_QE_CC()
-
-# Checking F77...
-X_AC_QE_F77()
 
 # Checking F90...
 X_AC_QE_F90()
@@ -59,11 +53,12 @@ X_AC_QE_CPP()
 # Checking linker...
 X_AC_QE_LD()
 
+# Checking CUDA...
+X_AC_QE_CUDA()
+
 # Checking F90 rule...
 X_AC_QE_F90RULE()
 
-AC_LANG_PUSH(Fortran 77)
-F77=$f90 # use Fortran 90 actually
 FFLAGS="$test_fflags"
 LDFLAGS="$test_ldflags"
 
@@ -78,6 +73,9 @@ X_AC_QE_FFT()
 
 # Setting libxc...
 ACX_LIBXC()
+
+# Setting FoX...
+X_AC_QE_FOX()
 
 # Checking for IBM MASS library...
 X_AC_QE_MASS()
@@ -94,6 +92,12 @@ X_AC_QE_ELPA()
 # Setting HDF5...
 X_AC_QE_HDF5()
 
+# Checking environ...
+X_AC_QE_ENVIRON()
+
+# Checking for optional compilation macros
+X_AC_QE_ENABLE_OPTIONS() 
+
 # Checking SIGNAL...
 X_AC_QE_SIGNAL()
 
@@ -102,6 +106,9 @@ X_AC_QE_RANLIB()
 
 # Checking wget or curl...
 X_AC_QE_WGET()
+
+# set up git
+X_AC_QE_GIT()
 
 # Show dflags before adding $(MANUAL_DFLAGS) and adapt to XLF (if needed)
 if test "$dflags" = "" ; then dflags="$try_dflags" ; fi
@@ -121,10 +128,9 @@ AC_SUBST(ld_libs)
 AC_SUBST(topdir)
 AC_SUBST(extlib_flags)
 
-AC_CONFIG_HEADERS([include/c_defs.h:include/c_defs.h.in])
+AC_CONFIG_HEADERS([include/qe_cdefs.h:include/qe_cdefs.h.in])
 AC_CONFIG_FILES([include/configure.h:include/configure.h.in])
 
-#AC_CONFIG_FILES(Makefile.cpu)
 AC_CONFIG_FILES(make.inc)
 AC_CONFIG_FILES(configure.msg)
 AC_CONFIG_FILES(install/make_wannier90.inc)

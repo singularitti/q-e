@@ -14,13 +14,12 @@ subroutine init_gipaw_1
   ! and create the projectors in radial part (paw_betar)
   !
   USE kinds ,      ONLY : dp
-  USE parameters , ONLY : lqmax , lmaxx
-  USE gipaw_module,ONLY : nbrx
+  USE upf_params , ONLY : lmaxx
   USE cell_base ,  ONLY : omega
   USE ions_base,   ONLY : nat, ntyp => nsp, ityp
   USE constants,   ONLY : fpi
-  USE us,          ONLY : dq, nqx, tab, tab_d2y, qrad, spline_ps
-  USE paw_gipaw,   ONLY : paw_recon, paw_nkb, paw_lmaxkb
+  USE uspp_data,   ONLY : dq, nqx, tab
+  USE paw_gipaw,   ONLY : paw_recon, paw_nkb, paw_lmaxkb, nbrx
   USE splinelib
   USE uspp,        ONLY : ap, aainit
   USE atom,        ONLY : rgrid, msh
@@ -305,26 +304,6 @@ subroutine init_gipaw_1
 #endif
 
   end do
-
-  ! initialize spline interpolation
-  if ( spline_ps ) then
-     allocate(xdata(nqx))
-     do iq = 1, nqx
-        xdata(iq) = (iq - 1) * dq
-     end do
-     do nt = 1, ntyp
-        allocate ( paw_recon(nt)%paw_tab_d2y(nqx,paw_recon(nt)%paw_nbeta) )
-        paw_recon(nt)%paw_tab_d2y = 0.0_dp
-        do nb = 1, paw_recon(nt)%paw_nbeta
-           l = paw_recon(nt)%aephi(nb)%label%l
-           d1 = ( paw_recon(nt)%paw_tab(2,nb) - paw_recon(nt)%paw_tab(1,nb) ) &
-                / dq
-           call spline ( xdata, paw_recon(nt)%paw_tab(:,nb), 0.0_dp, d1, &
-                paw_recon(nt)%paw_tab_d2y(:,nb) )
-        end do
-     end do
-     deallocate ( xdata )
-  end if
 
   deallocate (besr)
   deallocate (aux1)

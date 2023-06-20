@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2018 Quantum ESPRESSO group
+! Copyright (C) 2001-2021 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -25,7 +25,7 @@ subroutine hp_check_type(na)
   ! 
   USE ions_base,          ONLY : ityp, nat, ntyp => nsp, tau
   USE io_global,          ONLY : stdout
-  USE symm_base,          ONLY : nsym, set_sym, ft, ftau
+  USE symm_base,          ONLY : nsym, set_sym, ft, nofrac
   USE noncollin_module,   ONLY : nspin_mag, m_loc
   USE fft_base,           ONLY : dfftp
   USE ldaU_hp,            ONLY : recalc_sym
@@ -89,16 +89,22 @@ subroutine hp_check_type(na)
      !
      CALL set_sym (nat, tau, ityp, nspin_mag, m_loc)
      !
+     IF (nsym > nsym_old) THEN
+        WRITE( stdout, '(5x,"The number of symmetries is increased...")')
+        WRITE( stdout, '(5x,"Recompute again the symmetries by disabling fractional translations...")')
+        ! Disable fractional translations
+        nofrac = .true.
+        CALL set_sym (nat, tau, ityp, nspin_mag, m_loc)
+        ! Enable back fractional translations
+        nofrac = .false.
+        IF (nsym > nsym_old) THEN
+           WRITE( stdout, '(5x,"The number of symmetries is still increased... stopping!")')
+           WRITE( stdout, '(/5x,"TRY TO RUN THIS CALCULATION USING nosym=.true. and noinv=.true.")')
+           CALL errore ('hp_check_type', 'Something is wrong, the number of symmetries is increased', 1)
+        ENDIF
+     ENDIF
+     !
      DEALLOCATE(m_loc)
-     !
-     ! Since symmetries were recomputed, we need to reinitialize vectors
-     ! of fractional translations
-     !
-     DO isym = 1, nsym
-        ftau(1,isym) = NINT( ft(1,isym) * DBLE(dfftp%nr1) )
-        ftau(2,isym) = NINT( ft(2,isym) * DBLE(dfftp%nr2) )
-        ftau(3,isym) = NINT( ft(3,isym) * DBLE(dfftp%nr3) )
-     ENDDO
      !
      IF ( nsym == nsym_old ) THEN
         WRITE( stdout, '(5x,"The number of symmetries is the same as in PWscf :")')

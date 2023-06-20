@@ -9,7 +9,6 @@ SUBROUTINE xanes_dipole_general_edge(a,b,ncalcv,nl_init, xnorm,core_wfn,paw_ilto
   USE kinds,           ONLY : DP
   USE constants,       ONLY : pi, fpi
   USE io_global,       ONLY : stdout     ! Modules/io_global.f90
-  USE parameters,      ONLY : ntypx
   USE radial_grids,    ONLY : ndmx
   USE ions_base,       ONLY : nat, ntyp => nsp, ityp
   USE wvfct,           ONLY : npwx, nbnd, et, current_k
@@ -45,11 +44,14 @@ SUBROUTINE xanes_dipole_general_edge(a,b,ncalcv,nl_init, xnorm,core_wfn,paw_ilto
   USE coef_CG
   USE atom,            ONLY : rgrid, msh
   USE radin_mod
-  USE uspp,   ONLY : vkb, nkb, okvan !CG
-  USE ldaU,   ONLY : lda_plus_u
+  USE basis,           ONLY : natomwfc, wfcatom, swfcatom
+  USE uspp,            ONLY : vkb, nkb, okvan !CG
+  USE ldaU,            ONLY : lda_plus_u, lda_plus_u_kind
+  USE noncollin_module, ONLY : npol
   !<CG>
   USE xspectra_paw_variables, ONLY : xspectra_paw_nhm
   !</CG>
+  USE uspp_init,        ONLY : init_us_2
 
   IMPLICIT NONE
   REAL(dp) core_wfn(ndmx)
@@ -70,7 +72,7 @@ SUBROUTINE xanes_dipole_general_edge(a,b,ncalcv,nl_init, xnorm,core_wfn,paw_ilto
   REAL (dp) norm, mss, s, j, mj, dl, disg, CG
   REAL (dp), ALLOCATABLE :: aux(:)
   REAL (dp), ALLOCATABLE :: Mxanes(:,:)
-  COMPLEX(KIND=DP), EXTERNAL :: zdotc
+  REAL(KIND=DP), EXTERNAL :: ddot
   COMPLEX(dp), ALLOCATABLE :: paw_vkb_cplx(:,:)
   LOGICAL :: terminator
   REAL(dp) :: normps
@@ -305,9 +307,16 @@ SUBROUTINE xanes_dipole_general_edge(a,b,ncalcv,nl_init, xnorm,core_wfn,paw_ilto
         !<CG>        
         CALL init_gipaw_2(npw,igk_k(1,ik),xk(1,ik),paw_vkb)
         !</CG>
-        IF (.NOT.lda_plus_u) CALL init_us_2(npw,igk_k(1,ik),xk(1,ik),vkb)
-        IF (lda_plus_u) CALL orthoUwfc_k(ik)
-        
+       
+        CALL init_us_2(npw,igk_k(1,ik),xk(1,ik),vkb)
+
+        IF (lda_plus_u) THEN
+           ALLOCATE (wfcatom(npwx*npol,natomwfc), swfcatom(npwx*npol,natomwfc))
+           CALL orthoUwfc_k (ik, .FALSE.)
+           DEALLOCATE (wfcatom,swfcatom)
+           ! Compute the phase factor for each k point in the case of DFT+U+V
+           IF (lda_plus_u_kind.EQ.2) CALL phase_factor(ik)
+        ENDIF 
         
         ! $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
         ! Angular Matrix element
@@ -562,10 +571,10 @@ SUBROUTINE xanes_dipole_general_edge(a,b,ncalcv,nl_init, xnorm,core_wfn,paw_ilto
            spsiwfc(:)=(0.d0,0.d0)
            recalc=.true.
            CALL sm1_psi(recalc,npwx, npw, 1, psiwfc, spsiwfc)
-           xnorm_partial=zdotc(npw,psiwfc,1,spsiwfc,1)
+           xnorm_partial=ddot(2*npw,psiwfc,1,spsiwfc,1)
            DEALLOCATE(spsiwfc)
         ELSE
-           xnorm_partial=zdotc(npw,psiwfc,1,psiwfc,1)
+           xnorm_partial=ddot(2*npw,psiwfc,1,psiwfc,1)
         ENDIF
         !</CG>
         

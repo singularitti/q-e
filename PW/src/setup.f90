@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2016 Quantum ESPRESSO group
+! Copyright (C) 2001-2020 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -9,37 +9,43 @@
 !----------------------------------------------------------------------------
 SUBROUTINE setup()
   !----------------------------------------------------------------------------
+  !! This routine is called once at the beginning of the calculation and:
   !
-  ! ... This routine is called at the beginning of the calculation and
-  ! ... 1) determines various parameters of the calculation:
-  ! ...    zv        charge of each atomic type
-  ! ...    nelec     total number of electrons (if not given in input)
-  ! ...    nbnd      total number of bands (if not given in input)
-  ! ...    nbndx     max number of bands used in iterative diagonalization
-  ! ...    tpiba     2 pi / a (a = lattice parameter)
-  ! ...    tpiba2    square of tpiba
-  ! ...    gcutm     cut-off in g space for charge/potentials
-  ! ...    gcutms    cut-off in g space for smooth charge
-  ! ...    ethr      convergence threshold for iterative diagonalization
-  ! ... 2) finds actual crystal symmetry:
-  ! ...    s         symmetry matrices in the direct lattice vectors basis
-  ! ...    nsym      number of crystal symmetry operations
-  ! ...    nrot      number of lattice symmetry operations
-  ! ...    ft        fractionary translations
-  ! ...    irt       for each atom gives the corresponding symmetric
-  ! ...    invsym    if true the system has inversion symmetry
-  ! ... 3) generates k-points corresponding to the actual crystal symmetry
-  ! ... 4) calculates various quantities used in magnetic, spin-orbit, PAW
-  ! ...    electric-field, LDA+U calculations, and for parallelism
+  !! 1) determines various parameters of the calculation:
   !
+  !!  * zv:        charge of each atomic type;
+  !!  * nelec:     total number of electrons (if not given in input);
+  !!  * nbnd:      total number of bands (if not given in input);
+  !!  * nbndx:     max number of bands used in iterative diagonalization;
+  !!  * tpiba:     2 pi / a (a = lattice parameter);
+  !!  * tpiba2:    square of tpiba;
+  !!  * gcutm:     cut-off in g space for charge/potentials;
+  !!  * gcutms:    cut-off in g space for smooth charge;
+  !!  * ethr:      convergence threshold for iterative diagonalization;
+  !
+  !! 2) finds actual crystal symmetry:
+  !
+  !!  * s:         symmetry matrices in the direct lattice vectors basis;
+  !!  * nsym:      number of crystal symmetry operations;
+  !!  * nrot:      number of lattice symmetry operations;
+  !!  * ft:        fractionary translations;
+  !!  * irt:       for each atom gives the corresponding symmetric;
+  !!  * invsym:    if true the system has inversion symmetry;
+  !
+  !! 3) generates k-points corresponding to the actual crystal symmetry;
+  !
+  !! 4) calculates various quantities used in magnetic, spin-orbit, PAW
+  !!    electric-field, DFT+U(+V) calculations
+  !!
   USE kinds,              ONLY : DP
-  USE constants,          ONLY : eps8, rytoev, fpi, pi, degspin
+  USE constants,          ONLY : eps8, e2, fpi, pi, degspin
   USE parameters,         ONLY : npk
-  USE io_global,          ONLY : stdout
-  USE io_files,           ONLY : tmp_dir, prefix
+  USE io_global,          ONLY : stdout, ionode, ionode_id
+  USE io_files,           ONLY : xmlfile
   USE cell_base,          ONLY : at, bg, alat, tpiba, tpiba2, ibrav
   USE ions_base,          ONLY : nat, tau, ntyp => nsp, ityp, zv
   USE basis,              ONLY : starting_pot, natomwfc
+  USE fft_support,        ONLY : good_fft_order
   USE gvect,              ONLY : gcutm, ecutrho
   USE gvecw,              ONLY : gcutw, ecutwfc
   USE gvecs,              ONLY : doublegrid, gcutms, dual
@@ -47,9 +53,7 @@ SUBROUTINE setup()
                                  ltetra, lxkcry, nkstot, &
                                  nelup, neldw, two_fermi_energies, &
                                  tot_charge, tot_magnetization
-  USE lsda_mod,           ONLY : lsda, nspin, current_spin, isk, &
-                                 starting_magnetization
-  USE ener,               ONLY : ef
+  USE ener,               ONLY : ef, ef_up, ef_dw
   USE electrons_base,     ONLY : set_nelup_neldw
   USE start_k,            ONLY : nks_start, xk_start, wk_start, &
                                  nk1, nk2, nk3, k1, k2, k3
@@ -60,52 +64,48 @@ SUBROUTINE setup()
                                  allfrac
   USE wvfct,              ONLY : nbnd, nbndx
   USE control_flags,      ONLY : tr2, ethr, lscf, lbfgs, lmd, david, lecrpa,  &
-                                 isolve, niter, noinv, ts_vdw, &
-                                 lbands, use_para_diag, gamma_only, &
-                                 restart
+                                 isolve, niter, noinv, ts_vdw, tstress, &
+                                 lbands, gamma_only, restart
   USE cellmd,             ONLY : calc
-  USE uspp_param,         ONLY : upf, n_atom_wfc
+  USE upf_ions,           ONLY : n_atom_wfc
+  USE uspp_param,         ONLY : upf
   USE uspp,               ONLY : okvan
-  USE ldaU,               ONLY : lda_plus_u, init_lda_plus_u
+  USE ldaU,               ONLY : lda_plus_u, init_hubbard
   USE bp,                 ONLY : gdir, lberry, nppstr, lelfield, lorbm, nx_el,&
                                  nppstr_3d,l3dstring, efield
   USE fixed_occ,          ONLY : f_inp, tfixed_occ, one_atom_occupations
-  USE funct,              ONLY : set_dft_from_name
-  USE mp_pools,           ONLY : kunit
-  USE mp_bands,           ONLY : intra_bgrp_comm, nyfft
-  USE spin_orb,           ONLY : lspinorb, domag
-  USE noncollin_module,   ONLY : noncolin, npol, m_loc, i_cons, &
+  USE mp_pools,           ONLY : kunit, npool
+  USE mp_images,          ONLY : intra_image_comm
+  USE mp,                 ONLY : mp_bcast
+  USE lsda_mod,           ONLY : lsda, nspin, current_spin, isk, &
+                                 starting_magnetization
+  USE noncollin_module,   ONLY : noncolin, domag, npol, i_cons, m_loc, &
                                  angle1, angle2, bfield, ux, nspin_lsda, &
-                                 nspin_gga, nspin_mag
-  USE pw_restart_new,     ONLY : pw_readschema_file, init_vars_from_schema 
+                                 nspin_gga, nspin_mag, lspinorb
+  USE qexsd_module,       ONLY : qexsd_readschema
+  USE qexsd_copy,         ONLY : qexsd_copy_efermi
   USE qes_libs_module,    ONLY : qes_reset
-  USE qes_types_module,   ONLY : output_type, parallel_info_type, general_info_type 
-  USE exx,                ONLY : ecutfock, nbndproj
-  USE exx_base,           ONLY : exx_grid_init, exx_mp_init, exx_div_check
-  USE funct,              ONLY : dft_is_meta, dft_is_hybrid, dft_is_gradient
+  USE qes_types_module,   ONLY : output_type
+  USE exx,                ONLY : ecutfock
+  USE xc_lib,             ONLY : xclib_dft_is
   USE paw_variables,      ONLY : okpaw
-  USE fcp_variables,      ONLY : lfcpopt, lfcpdyn
   USE extfield,           ONLY : gate
+  USE esm,                ONLY : esm_z_inv
+  USE fcp_module,         ONLY : lfcp
+  USE gcscf_module,       ONLY : lgcscf
+  USE rism_module,        ONLY : lrism, rism_calc1d
+  USE additional_kpoints, ONLY : add_additional_kpoints
+  USE control_flags,      ONLY : sic
+  USE sic_mod,            ONLY : init_sic, occ_f2fn, sic_energy
   !
   IMPLICIT NONE
   !
-  INTEGER  :: na, is, ierr, ibnd, ik, nrot_
+  INTEGER  :: na, is, ierr, ibnd, ik, nrot_, nbnd_, nr3, nk_ 
   LOGICAL  :: magnetic_sym, skip_equivalence=.FALSE.
   REAL(DP) :: iocc, ionic_charge, one
   !
-  LOGICAL, EXTERNAL  :: check_para_diag
-  !
-  TYPE(output_type)                         :: output_obj 
-  TYPE(parallel_info_type)                  :: parinfo_obj
-  TYPE(general_info_type)                   :: geninfo_obj
+  TYPE(output_type)  :: output_obj 
   !  
-#if defined(__MPI)
-  LOGICAL :: lpara = .true.
-#else
-  LOGICAL :: lpara = .false.
-#endif
-
-  !
   ! ... okvan/okpaw = .TRUE. : at least one pseudopotential is US/PAW
   !
   okvan = ANY( upf(1:ntyp)%tvanp )
@@ -114,7 +114,7 @@ SUBROUTINE setup()
   ! ... check for features not implemented with US-PP or PAW
   !
   IF ( okvan .OR. okpaw ) THEN
-     IF ( dft_is_meta() ) CALL errore( 'setup', &
+     IF ( xclib_dft_is('meta') ) CALL errore( 'setup', &
                                'Meta-GGA not implemented with USPP/PAW', 1 )
      IF ( noncolin .AND. lberry)  CALL errore( 'setup', &
        'Noncolinear Berry Phase/electric not implemented with USPP/PAW', 1 )
@@ -124,24 +124,36 @@ SUBROUTINE setup()
                   'Orbital Magnetization not implemented with USPP/PAW', 1 )
   END IF
 
-  IF ( dft_is_hybrid() ) THEN
+  IF ( xclib_dft_is('hybrid') ) THEN
      IF ( lberry ) CALL errore( 'setup ', &
                          'hybrid XC not allowed in Berry-phase calculations',1 )
+     IF ( lelfield ) CALL errore( 'setup ', &
+                         'hybrid XC and electric fields untested',1 )
      IF ( allfrac ) CALL errore( 'setup ', &
                          'option use_all_frac incompatible with hybrid XC', 1 )
-     IF (.NOT. lscf) CALL errore( 'setup ', &
-                         'hybrid XC not allowed in non-scf calculations', 1 )
+!     IF (.NOT. lscf) CALL errore( 'setup ', &
+!                         'hybrid XC not allowed in non-scf calculations', 1 )
      IF ( ANY (upf(1:ntyp)%nlcc) ) CALL infomsg( 'setup ', 'BEWARE:' // &
                & ' nonlinear core correction is not consistent with hybrid XC')
      IF (okvan) THEN
-        IF (ecutfock /= 4*ecutwfc) CALL infomsg &
-           ('setup','Warning: US/PAW use ecutfock=4*ecutwfc, ecutfock ignored')
+        IF (ecutfock /= 4.0_dp*ecutwfc) THEN
+           ecutfock = MIN(4.0_dp*ecutwfc,ecutrho)
+           CALL infomsg ('setup', &
+                    'Warning: ecutfock not valid for US/PAW, ignored')
+        END IF
         IF ( lmd .OR. lbfgs ) CALL errore &
-           ('setup','forces for hybrid functionals + US/PAW not implemented')
+           ('setup','forces for hybrid functionals + US/PAW not implemented',1)
         IF ( noncolin ) CALL errore &
            ('setup','Noncolinear hybrid XC for USPP not implemented',1)
      END IF
      IF ( noncolin ) no_t_rev=.true.
+  END IF
+  !
+  IF ( xclib_dft_is('meta') ) THEN
+     IF ( noncolin )  CALL errore( 'setup', &
+                               'Non-collinear Meta-GGA not implemented', 1 )
+     IF ( ANY (upf(1:ntyp)%nlcc) ) CALL infomsg( 'setup ', 'BEWARE:' // &
+               & ' nonlinear core correction is not consistent with meta-GGA')
   END IF
   !
   ! ... Compute the ionic charge for each atom type and the total ionic charge
@@ -161,44 +173,62 @@ SUBROUTINE setup()
   !
   nelec = ionic_charge - tot_charge
   !
-  IF ( lbands .OR. ( (lfcpopt .OR. lfcpdyn ) .AND. restart )) THEN 
-     CALL pw_readschema_file( ierr , output_obj, parinfo_obj, geninfo_obj )
+  IF ( .NOT. lscf .OR. ( (lfcp .OR. lgcscf) .AND. restart ) ) THEN
+     !
+     ! ... in these cases, we need (or it is useful) to read the Fermi energy
+     ! ... also, number of bands is needed for FCP/GC-SCF
+     !
+     IF (ionode) CALL qexsd_readschema ( xmlfile(), ierr, output_obj )
+     CALL mp_bcast(ierr, ionode_id, intra_image_comm)
+     IF ( ierr > 0 ) CALL errore ( 'setup', 'problem reading ef from file ' //&
+          & TRIM(xmlfile()), ierr )
+     IF (ionode) CALL qexsd_copy_efermi ( output_obj%band_structure, &
+          nelec, ef, two_fermi_energies, ef_up, ef_dw, nbnd_ )
+     ! convert to Ry a.u. 
+     ef = ef*e2
+     ef_up = ef_up*e2
+     ef_dw = ef_dw*e2
+     CALL mp_bcast(nelec, ionode_id, intra_image_comm)
+     CALL mp_bcast(ef, ionode_id, intra_image_comm)
+     CALL mp_bcast(two_fermi_energies, ionode_id, intra_image_comm)
+     CALL mp_bcast(ef_up, ionode_id, intra_image_comm)
+     CALL mp_bcast(ef_dw, ionode_id, intra_image_comm)
+     CALL mp_bcast(nbnd_, ionode_id, intra_image_comm)
+     CALL qes_reset  ( output_obj )
+     !
   END IF
   !
-  ! 
-  IF ( (lfcpopt .OR. lfcpdyn) .AND. restart ) THEN  
-     CALL init_vars_from_schema( 'ef', ierr,  output_obj, parinfo_obj, geninfo_obj)
+  IF ( (lfcp .OR. lgcscf) .AND. restart ) THEN
      tot_charge = ionic_charge - nelec
-  END IF 
+     nbnd = nbnd_
+  END IF
   !
   ! ... magnetism-related quantities
   !
-  ALLOCATE( m_loc( 3, nat ) )
+  ! ... Set the domag variable to make a spin-orbit calculation with zero
+  ! ... magnetization
+  !
+  IF ( noncolin  ) THEN
+     domag = ANY ( ABS( starting_magnetization(1:ntyp) ) > 1.D-6 )
+  ELSE
+     domag = .false.
+  END IF
+  !
+  !  Set the different spin indices
+  !
+  CALL set_spin_vars( lsda, noncolin, domag, &
+         npol, nspin, nspin_lsda, nspin_mag, nspin_gga, current_spin )
+  !
   ! time reversal operation is set up to 0 by default
   t_rev = 0
+  !
+  ALLOCATE( m_loc( 3, nat ) )
   IF ( noncolin ) THEN
      !
      ! gamma_only and noncollinear not allowed
      !
      if (gamma_only) call errore('setup', &
                                  'gamma_only and noncolin not allowed',1)
-     !
-     ! ... wavefunctions are spinors with 2 components
-     !
-     npol = 2
-     !
-     ! ... Set the domag variable to make a spin-orbit calculation with zero
-     ! ... magnetization
-     !
-     IF ( lspinorb ) THEN
-        !
-        domag = ANY ( ABS( starting_magnetization(1:ntyp) ) > 1.D-6 )
-        !
-     ELSE
-        !
-        domag = .TRUE.
-        !
-     END IF
      !
      DO na = 1, nat
         !
@@ -213,50 +243,34 @@ SUBROUTINE setup()
      !  initialize the quantization direction for gga
      !
      ux=0.0_DP
-     if (dft_is_gradient()) call compute_ux(m_loc,ux,nat)
+     if (xclib_dft_is('gradient')) call compute_ux(m_loc,ux,nat)
      !
   ELSE
      !
-     ! ... wavefunctions are scalars
-     !
      IF (lspinorb)  CALL errore( 'setup ',  &
          'spin orbit requires a non collinear calculation', 1 )
-     npol = 1
-     !
      !
      IF ( i_cons == 1) then
         do na=1,nat
            m_loc(1,na) = starting_magnetization(ityp(na))
         end do
      end if
-     IF ( i_cons /= 0 .AND. nspin ==1) &
+     IF ( i_cons /= 0 .AND. nspin==1 ) &
         CALL errore( 'setup', 'this i_cons requires a magnetic calculation ', 1 )
      IF ( i_cons /= 0 .AND. i_cons /= 1 ) &
-        CALL errore( 'setup', 'this i_cons requires a non colinear run', 1 )
+          CALL errore( 'setup', 'this i_cons requires a non colinear run', 1 )
+     !
   END IF
-  !
-  !  Set the different spin indices
-  !
-  nspin_mag  = nspin
-  nspin_lsda = nspin
-  nspin_gga  = nspin
-  IF (nspin==4) THEN
-     nspin_lsda=1
-     IF (domag) THEN
-        nspin_gga=2
-     ELSE
-        nspin_gga=1
-        nspin_mag=1
-     ENDIF
-  ENDIF    
   !
   ! ... if this is not a spin-orbit calculation, all spin-orbit pseudopotentials
   ! ... are transformed into standard pseudopotentials
   !
-  IF ( lspinorb .AND. ALL ( .NOT. upf(:)%has_so ) ) &
-        CALL infomsg ('setup','At least one non s.o. pseudo')
-  !
-  IF ( .NOT. lspinorb ) CALL average_pp ( ntyp )
+  IF ( lspinorb ) THEN
+     IF ( ALL ( .NOT. upf(:)%has_so ) ) &
+          CALL infomsg ('setup','At least one non s.o. pseudo')
+  ELSE
+     CALL average_pp ( ntyp )
+  END IF
   !
   ! ... If the occupations are from input, check the consistency with the
   ! ... number of electrons
@@ -301,7 +315,7 @@ SUBROUTINE setup()
             .AND. .NOT. tfixed_occ .AND. .NOT. two_fermi_energies ) &
       CALL errore( 'setup', 'spin-polarized system, specify occupations', 1 )
   !
-  ! ... setting nelup/neldw 
+  ! ... setting the number of up and down electrons
   !
   call set_nelup_neldw ( tot_magnetization, nelec, nelup, neldw )
   !
@@ -348,10 +362,14 @@ SUBROUTINE setup()
   ! ... for subsequent steps ethr is automatically updated in electrons
   !
   IF ( nat==0 ) THEN
+     !
      ethr=1.0D-8
+     !
   ELSE IF ( .NOT. lscf ) THEN
      !
-     IF ( ethr == 0.D0 ) ethr = 0.1D0 * MIN( 1.D-2, tr2 / nelec )
+     ! ... do not allow convergence threshold of scf and nscf to become too small 
+     ! 
+     IF ( ethr == 0.D0 ) ethr = MAX(1.D-13, 0.1D0 * MIN( 1.D-2, tr2 / nelec ))
      !
   ELSE
      !
@@ -363,14 +381,30 @@ SUBROUTINE setup()
            ! ... do not spoil it with a lousy first diagonalization :
            ! ... set a strict ethr in the input file (diago_thr_init)
            !
-           ethr = 1.D-5
+           IF ( lgcscf ) THEN
+              !
+              ethr = 1.D-8
+              !
+           ELSE
+              !
+              ethr = 1.D-5
+              !
+           END IF
            !
         ELSE
            !
            ! ... starting atomic potential is probably far from scf
            ! ... do not waste iterations in the first diagonalizations
            !
-           ethr = 1.0D-2
+           IF ( lgcscf ) THEN
+              !
+              ethr = 1.0D-5
+              !
+           ELSE
+              !
+              ethr = 1.0D-2
+              !
+           END IF
            !
         END IF
         !
@@ -387,9 +421,8 @@ SUBROUTINE setup()
   ! ... set the max number of bands used in iterative diagonalization
   !
   nbndx = nbnd
-  IF ( isolve == 0 ) nbndx = david * nbnd
-  !
-  use_para_diag = check_para_diag( nbnd )
+  IF ( isolve == 0  ) nbndx = david * nbnd 
+  IF (isolve == 4 ) nbndx = 2 *nbnd 
   !
   ! ... Set the units in real and reciprocal space
   !
@@ -400,8 +433,13 @@ SUBROUTINE setup()
   !
   doublegrid = ( dual > 4.0_dp + eps8 )
   IF ( doublegrid .AND. ( .NOT.okvan .AND. .NOT.okpaw .AND. &
-                          .NOT. ANY (upf(1:ntyp)%nlcc)      ) ) &
+                          .NOT. ANY (upf(1:ntyp)%nlcc) .AND. &
+                          .NOT. lrism ) ) &
        CALL infomsg ( 'setup', 'no reason to have ecutrho>4*ecutwfc' )
+  IF ( ecutwfc > 10000.d0 .OR. ecutwfc < 1.d0 ) THEN
+       WRITE(stdout,*) 'ECUTWFC = ', ecutwfc
+       CALL errore ( 'setup', 'meaningless value for ecutwfc', 1)
+  END IF
   gcutm = dual * ecutwfc / tpiba2
   gcutw = ecutwfc / tpiba2
   !
@@ -499,6 +537,8 @@ SUBROUTINE setup()
      END IF
   END IF
   !
+  CALL add_additional_kpoints(nkstot, xk, wk)
+  !
   IF ( nat==0 ) THEN
      !
      nsym=nrot
@@ -509,7 +549,8 @@ SUBROUTINE setup()
      !
      ! ... eliminate rotations that are not symmetry operations
      !
-     CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, gate )
+     CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, &
+                   & gate .OR. (.NOT. esm_z_inv(lrism)) )
      !
      ! ... do not force FFT grid to be commensurate with fractional translations
      !
@@ -519,10 +560,14 @@ SUBROUTINE setup()
   !
   ! ... nosym: do not use any point-group symmetry (s(:,:,1) is the identity)
   !
-  IF ( nosym ) nsym = 1
+  IF ( nosym ) THEN
+     nsym = 1
+     invsym = .FALSE.
+     fft_fact(:) = 1
+  END IF
   !
   IF ( nsym > 1 .AND. ibrav == 0 ) CALL infomsg('setup', &
-       'DEPRECATED: symmetry with ibrav=0, use correct ibrav instead')
+       'using ibrav=0 with symmetry is DISCOURAGED, use correct ibrav instead')
   !
   ! ... Input k-points are assumed to be  given in the IBZ of the Bravais
   ! ... lattice, with the full point symmetry of the lattice.
@@ -544,15 +589,7 @@ SUBROUTINE setup()
            .AND. .NOT. ( calc == 'mm' .OR. calc == 'nm' ) ) &
        CALL infomsg( 'setup', 'Dynamics, you should have no symmetries' )
   !
-  IF ( lbands ) THEN
-     !
-     ! ... if calculating bands, we read the Fermi energy
-     !
-     CALL init_vars_from_schema( 'ef',   ierr , output_obj, parinfo_obj, geninfo_obj)
-     CALL errore( 'setup ', 'problem reading ef from file ' // &
-             & TRIM( tmp_dir ) // TRIM( prefix ) // '.save', ierr )
-     !
-  ELSE IF ( ltetra ) THEN
+  IF ( ltetra ) THEN
      !
      ! ... Calculate quantities used in tetrahedra method
      !
@@ -567,12 +604,6 @@ SUBROUTINE setup()
      END IF
      !
   END IF
-  IF ( lbands .OR. ( (lfcpopt .OR. lfcpdyn ) .AND. restart ) ) THEN 
-     CALL qes_reset  ( output_obj )
-     CALL qes_reset  ( parinfo_obj )
-     CALL qes_reset  ( geninfo_obj )
-  END IF 
-  !
   !
   IF ( lsda ) THEN
      !
@@ -606,17 +637,6 @@ SUBROUTINE setup()
   !
   IF ( nkstot > npk ) CALL errore( 'setup', 'too many k points', nkstot )
   !
-  ! ... distribute k-points (and their weights and spin indices)
-  !
-  kunit = 1
-  CALL divide_et_impera ( nkstot, xk, wk, isk, nks )
-  !
-  IF ( dft_is_hybrid() ) THEN
-     CALL exx_grid_init()
-     CALL exx_mp_init()
-     CALL exx_div_check()
-  ENDIF
-
   IF (one_atom_occupations) THEN
      DO ik=1,nkstot
         DO ibnd=natomwfc+1, nbnd
@@ -626,79 +646,215 @@ SUBROUTINE setup()
      ENDDO
   ENDIF
   !
-  ! ... Set up Hubbard parameters for LDA+U calculation
+  ! ... Set up Hubbard parameters for DFT+Hubbard
   !
-  CALL init_lda_plus_u ( upf(1:ntyp)%psd, noncolin )
+  CALL init_hubbard ( upf(1:ntyp)%psd, nspin, noncolin )
   !
   ! ... initialize d1 and d2 to rotate the spherical harmonics
   !
-  IF (lda_plus_u .or. okpaw .or. (okvan.and.dft_is_hybrid()) ) CALL d_matrix( d1, d2, d3 )
+  IF (lda_plus_u .or. okpaw .or. (okvan.and.xclib_dft_is('hybrid')) ) CALL d_matrix( d1, d2, d3 )
+  !
+  ! ... set parallelization strategy: need an estimate of FFT dimension along z
+  !
+  nr3 = int ( sqrt(gcutms)*sqrt (at(1, 3)**2 + at(2, 3)**2 + at(3, 3)**2) ) + 1
+  nr3 = good_fft_order( 2*nr3, fft_fact(3) )
+  !
+  ! ... nk_ = number of k-points usable for k-point parallelization
+  !           (set to 1 if k-point parallelization is not implemented)
+  nk_ = nkstot
+  IF ( lberry .OR. lelfield .OR. lorbm .OR. &
+       ( xclib_dft_is('hybrid') .AND. tstress ) ) nk_ = 1
+  !
+  CALL setup_para ( nr3, nk_, nbnd )
+  !
+  ! ... distribute k-points across processors of a pool
+  !
+  kunit   = 1
+  CALL divide_et_impera ( nkstot, xk, wk, isk, nks )
+  !
+  ! ... checks and initializations to be performed after parallelization setup
+  !
+  IF ( lberry .OR. lelfield .OR. lorbm ) THEN
+     IF ( npool > 1 ) CALL errore( 'iosys', &
+          'Berry Phase/electric fields not implemented with pools', 1 )
+  END IF
+  IF ( xclib_dft_is('hybrid') ) THEN
+     IF ( nks == 0 ) CALL errore('setup','pools with no k-points' &
+          & // ' not allowed for hybrid functionals',1)
+     IF ( tstress .and. npool > 1 )  CALL errore('setup', &
+         'stress for hybrid functionals not available with pools', 1)
+     !
+     CALL setup_exx  ()
+     !
+  END IF
+  !
+  ! ... calculate solvent-solvent interaction (1D-RISM).
+  !
+  IF (lrism) CALL rism_calc1d()
+  !
+  ! ... SIC calculation
+  !
+  IF(sic) THEN
+     CALL init_sic()
+     IF (sic_energy) CALL occ_f2fn()
+  END IF
   !
   RETURN
   !
 END SUBROUTINE setup
 !
 !----------------------------------------------------------------------------
-LOGICAL FUNCTION check_para_diag( nbnd )
+SUBROUTINE setup_para ( nr3, nkstot, nbnd )
+  !----------------------------------------------------------------------------
   !
-  USE io_global,        ONLY : stdout, ionode, ionode_id
-  USE mp_diag,          ONLY : np_ortho, ortho_parent_comm 
-  USE mp_bands,         ONLY : intra_bgrp_comm
-  USE mp_pools,         ONLY : intra_pool_comm
-  USE control_flags,    ONLY : gamma_only
-
+  ! Initialize the various parallelization levels, trying to guess decent
+  ! parameters for npool, ndiag, ntg, if not specified in the command line
+  ! Must be called at the end of "setup" but before "setup_exx",
+  ! only once per run
+  !
+  USE control_flags, ONLY : use_para_diag, use_gpu
+  USE io_global, ONLY : stdout
+  USE mp_bands,  ONLY : mp_start_bands, nbgrp, ntask_groups, nproc_bgrp,&
+                        nyfft
+  USE mp_pools,  ONLY : intra_pool_comm, mp_start_pools, npool
+  USE mp_images, ONLY : intra_image_comm, nproc_image
+  USE command_line_options, ONLY : npool_, ndiag_, nband_, ntg_, nyfft_, &
+          nmany_, pencil_decomposition_
+  !
   IMPLICIT NONE
-
-  INTEGER, INTENT(IN) :: nbnd
+  !
+  INTEGER, INTENT(in) :: nr3
+  INTEGER, INTENT(in) :: nkstot
+  INTEGER, INTENT(in) :: nbnd
+  !
+  LOGICAL, EXTERNAL  :: check_gpu_support
   LOGICAL, SAVE :: first = .TRUE.
-  LOGICAL, SAVE :: saved_value = .FALSE.
-
-#if defined(__MPI)
-  IF( .NOT. first ) THEN
-      check_para_diag = saved_value
-      RETURN
-  END IF
-  first = .FALSE.
+  INTEGER :: maxtask, np
   !
-  IF( np_ortho(1) > nbnd ) &
-     CALL errore ('check_para_diag', 'Too few bands for required ndiag',nbnd)
+  ! do not execute twice: unpredictable results may follow
   !
-  check_para_diag = ( np_ortho( 1 ) > 1 .AND. np_ortho( 2 ) > 1 )
-  saved_value = check_para_diag
+  IF ( .NOT.first ) RETURN
+  first = .false.
   !
-  IF ( ionode ) THEN
+  ! GPUs (not sure it serves any purpose)
+  !
+  use_gpu = check_gpu_support( )
+  !
+  ! k-point parallelization first
+  !
+  IF ( npool_== 0 ) THEN
+     npool_ = 1
      !
-     WRITE( stdout, '(/,5X,"Subspace diagonalization in iterative solution ",&
-                     &     "of the eigenvalue problem:")' ) 
-     IF ( check_para_diag ) THEN
-        IF (ortho_parent_comm .EQ. intra_pool_comm) THEN
-           WRITE( stdout, '(5X,"one sub-group per k-point group (pool) will be used")' )
-        ELSE IF (ortho_parent_comm .EQ. intra_bgrp_comm) THEN
-           WRITE( stdout, '(5X,"one sub-group per band group will be used")' )
-        ELSE
-           CALL errore( 'setup','Unexpected sub-group communicator ', 1 )
-        END IF
-#if defined(__ELPA) || defined(__ELPA_2015) || defined(__ELPA_2016)
-        WRITE( stdout, '(5X,"ELPA distributed-memory algorithm ", &
-              & "(size of sub-group: ", I2, "*", I3, " procs)",/)') &
-               np_ortho(1), np_ortho(2)
-#elif defined(__SCALAPACK)
-        WRITE( stdout, '(5X,"scalapack distributed-memory algorithm ", &
-              & "(size of sub-group: ", I2, "*", I3, " procs)",/)') &
-               np_ortho(1), np_ortho(2)
+     if ( nproc_image > nr3/2 .and. nkstot > 1 ) then
+        !
+        ! if too many mpi processes for this fft dimension,
+        ! use k-point parallelization if available
+        !
+pool:   do np = 2, nkstot
+           ! npool should be a divisor of the number of processors
+           if ( mod(nproc_image, np) /= 0 ) cycle
+           npool_= np
+           if ( nproc_image/np <= nr3/2 ) exit pool
+        end do pool
+     end if
+  END IF
+  CALL mp_start_pools ( npool_, intra_image_comm )
+  !
+  ! band parallelization (nband only; ntg and nyfft below are just copied)
+  !
+#if defined (__CUDA_OPTIMIZED)
+  ! band parallelization is effectively disabled in this case
+  CALL mp_start_bands ( 1 , ntg_, nyfft_, intra_pool_comm )
 #else
-        WRITE( stdout, '(5X,"custom distributed-memory algorithm ", &
-              & "(size of sub-group: ", I2, "*", I3, " procs)",/)') &
-               np_ortho(1), np_ortho(2)
+  CALL mp_start_bands ( nband_, ntg_, nyfft_, intra_pool_comm )
 #endif
-     ELSE
-        WRITE( stdout, '(5X,"a serial algorithm will be used",/)' )
-     END IF
-     !
+  !
+  ! Set "task groups", max 16, if too many processors for PW parallelization
+  !
+  IF ( ntask_groups == 0 ) THEN
+     ntask_groups = 1
+     if ( nproc_bgrp > nr3 ) THEN
+        maxtask = min (nbnd, 16)
+task:   do np = 2, maxtask
+           ! ensure that ntask_group, that coincides with nyfft,
+           ! is commensurate with the number of procs for PW parallelization
+           if ( mod(nproc_bgrp,np) /= 0 ) cycle
+           if ( nproc_bgrp/np < nr3/4 ) then 
+              ntask_groups = np
+              exit task 
+           end if
+        end do task
+      end if
   END IF
   !
+  ! Note that "task_groups" require to set pencil_decomposition to .true.
+  ! Same if there are more processors than xy planes in the FFT
+  !
+  IF ( ntask_groups /= 1 .OR. nproc_bgrp > nr3 ) pencil_decomposition_ = .true. 
+  !
+  ! printout - same as in environment.f90
+  !
+  WRITE( stdout, * )
+  IF ( npool > 1 ) WRITE( stdout, &
+         '(5X,"K-points division:     npool     = ",I7)' ) npool
+  IF ( nbgrp > 1 ) WRITE( stdout, &
+         '(5X,"band groups division:  nbgrp     = ",I7)' ) nbgrp
+  IF ( nproc_bgrp > 1 ) WRITE( stdout, &
+         '(5X,"R & G space division:  proc/nbgrp/npool/nimage = ",I7)' ) nproc_bgrp
+  IF ( nproc_bgrp > nr3 ) WRITE( stdout, &
+         '(5X,"WARNING: too many processors for an effective parallelization!")' ) 
+  IF ( nyfft > 1 ) WRITE( stdout, &
+         '(5X,"wavefunctions fft division:  Y-proc x Z-proc = ",2I7)' ) &
+         nyfft, nproc_bgrp / nyfft
+  IF ( ntask_groups > 1 ) WRITE( stdout, &
+         '(5X,"wavefunctions fft division:  task group distribution",/,34X,"#TG    x Z-proc = ",2I7)' ) &
+         ntask_groups, nproc_bgrp / ntask_groups
+  IF ( nmany_ > 1) WRITE( stdout, '(5X,"FFT bands division:     nmany     = ",I7)' ) nmany_
+  !
+  ! linear algebra - for GPUs, ndiag = 1; otherwise, a value ensuring that
+  ! matrices nbnd*nbnd are distributed into blocks of size > 100x100
+  !
+  if ( ndiag_ == 0 .AND. use_gpu ) ndiag_ = 1
+  if ( ndiag_ == 0 ) then
+     do np = nint(nbnd/100.), 1, -1
+         if ( np**2 <= nproc_bgrp ) exit
+     end do
+     ndiag_ = max(1,np**2)
+  end if
+  !
+  CALL set_para_diag( nbnd, use_para_diag )
+  !
+END SUBROUTINE setup_para
+!
+!----------------------------------------------------------------------------
+LOGICAL FUNCTION check_gpu_support( )
+  ! Minimal case: returns true if compiled for GPUs
+  IMPLICIT NONE
+  !
+#if defined(__CUDA)
+  check_gpu_support = .TRUE.
 #else
-  check_para_diag = .FALSE.
+  check_gpu_support = .FALSE.
 #endif
-  RETURN
-END FUNCTION check_para_diag
+  !
+END FUNCTION check_gpu_support
+!
+!----------------------------------------------------------------------------
+SUBROUTINE setup_exx ( )
+  !----------------------------------------------------------------------------
+  !
+  ! Must be called after setup_para, before init_run, only once
+  !
+  USE mp_exx,    ONLY : mp_start_exx
+  USE mp_pools,  ONLY : intra_pool_comm
+  USE exx_base,  ONLY : exx_grid_init, exx_mp_init, exx_div_check
+  USE command_line_options, ONLY : nband_, ntg_
+  !
+  IMPLICIT NONE
+  !
+  CALL mp_start_exx ( nband_, ntg_, intra_pool_comm )
+  CALL exx_grid_init()
+  CALL exx_mp_init()
+  CALL exx_div_check()
+  !
+END SUBROUTINE setup_exx

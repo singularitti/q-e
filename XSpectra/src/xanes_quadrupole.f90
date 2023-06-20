@@ -9,7 +9,6 @@ SUBROUTINE xanes_quadrupole(a,b,ncalcv,xnorm,core_wfn,paw_iltonhb,&
   USE io_global,       ONLY: stdout     ! Modules/io_global.f90
   USE kinds,           ONLY: DP
   USE constants,       ONLY: pi
-  USE parameters,      ONLY: ntypx
   USE radial_grids,    ONLY: ndmx
   USE ions_base,       ONLY: nat, ntyp => nsp, ityp
   USE wvfct,           ONLY: npwx, nbnd, et, current_k
@@ -41,17 +40,15 @@ SUBROUTINE xanes_quadrupole(a,b,ncalcv,xnorm,core_wfn,paw_iltonhb,&
                              xkvec, xepsilon, save_file_kind,              &
                              calculated, time_limit
   USE atom,            ONLY: rgrid, msh
-  !  use atom,        ONLY : &
-  !       mesh,     &!mesh(ntypx) number of mesh points
-  !       msh ,     &!msh(ntypx)the point at rcut=end of radial integration
-  !       r   
   USE radin_mod
   USE uspp,            ONLY: vkb, nkb, okvan !CG
-  USE ldaU,            ONLY: lda_plus_u
-  USE basis,           ONLY: natomwfc
+  USE ldaU,            ONLY: lda_plus_u, lda_plus_u_kind
+  USE basis,           ONLY: natomwfc, wfcatom, swfcatom
+  USE noncollin_module, ONLY : npol
   !<CG>
   USE xspectra_paw_variables, ONLY: xspectra_paw_nhm
   !</CG>
+  USE uspp_init,        ONLY : init_us_2
 
   IMPLICIT NONE
   !
@@ -74,13 +71,12 @@ SUBROUTINE xanes_quadrupole(a,b,ncalcv,xnorm,core_wfn,paw_iltonhb,&
 
 
   REAL (dp), ALLOCATABLE :: aux(:)
-  COMPLEX(KIND=DP), EXTERNAL :: zdotc
   COMPLEX(dp), ALLOCATABLE :: paw_vkb_cplx(:,:)
   COMPLEX(KIND=dp), ALLOCATABLE :: psi(:)
   COMPLEX(dp), ALLOCATABLE :: psiwfc(:), spsiwfc(:)
   CHARACTER(LEN=4) :: verbosity
 
-  REAL(DP), EXTERNAL ::  get_clock
+  REAL(DP), EXTERNAL :: ddot, get_clock
   REAL(dp) :: timenow
   EXTERNAL zdscal
 
@@ -244,9 +240,17 @@ SUBROUTINE xanes_quadrupole(a,b,ncalcv,xnorm,core_wfn,paw_iltonhb,&
      !<CG>
      CALL init_gipaw_2(npw,igk_k(1,ik),xk(1,ik),paw_vkb)
      !</CG>
-     if(.not.lda_plus_u) CALL init_us_2(npw,igk_k(1,ik),xk(1,ik),vkb)
-     IF (lda_plus_u) CALL orthoUwfc_k(ik)
 
+     CALL init_us_2(npw,igk_k(1,ik),xk(1,ik),vkb)
+
+     IF (lda_plus_u) THEN
+        ALLOCATE (wfcatom(npwx*npol,natomwfc), swfcatom(npwx*npol,natomwfc))
+        CALL orthoUwfc_k (ik, .FALSE.)
+        DEALLOCATE (wfcatom,swfcatom)
+        ! Compute the phase factor for each k point in the case of DFT+U+V
+        IF (lda_plus_u_kind.EQ.2) CALL phase_factor(ik)
+     ENDIF 
+     !
      ! Angular Matrix element
      !
      !... Calculates the complex PAW projectors, paw_vkb_cplx, from
@@ -360,10 +364,10 @@ SUBROUTINE xanes_quadrupole(a,b,ncalcv,xnorm,core_wfn,paw_iltonhb,&
         spsiwfc(:)=(0.d0,0.d0)
         recalc=.true.
         CALL sm1_psi(recalc,npwx, npw, 1, psiwfc, spsiwfc)
-        xnorm_partial=zdotc(npw,psiwfc,1,spsiwfc,1)
+        xnorm_partial=ddot(2*npw,psiwfc,1,spsiwfc,1)
         DEALLOCATE(spsiwfc)
      ELSE
-        xnorm_partial=zdotc(npw,psiwfc,1,psiwfc,1)
+        xnorm_partial=ddot(2*npw,psiwfc,1,psiwfc,1)
      ENDIF
      !</CG>
 

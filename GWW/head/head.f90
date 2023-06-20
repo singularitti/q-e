@@ -104,7 +104,6 @@ PROGRAM head
      !
      !  If necessary the bands are recalculated
      !
-     !IF (setup_pw) CALL run_pwscf(do_band)
      IF (setup_pw) CALL run_nscf(do_band, iq)
      !
      !  Initialize the quantities which do not depend on
@@ -114,11 +113,7 @@ PROGRAM head
      !
      !  electric field perturbation
      !
-
-     IF (epsil) CALL phescf()
-     
      if(l_head) then
-
         call solve_head
      endif
      !
@@ -150,10 +145,11 @@ PROGRAM head
      !
      ! ... cleanup of the variables for the next q point
      !
-     CALL clean_pw_ph(iq)
+     CALL clean_pw_ph(iq)  
      !
   END DO
 
+  
   CALL ph_writefile('init',0,0,ierr)
   CALL collect_grid_files()
   CALL destroy_status_run()

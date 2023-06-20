@@ -8,54 +8,55 @@
 !-----------------------------------------------------------------------
 subroutine symm(phi, u, xq, s, isym, rtau, irt, at, bg, nat)
   !-----------------------------------------------------------------------
-  !
-  !    This routine symmetrizes the matrix of electron-phonon coefficients
-  !    written in the basis of the modes
+  !! This routine symmetrizes the matrix of electron-phonon coefficients
+  !! written in the basis of the modes.
   !
   USE kinds,     ONLY: DP
   USE constants, ONLY: tpi
   !
   implicit none
-  integer, intent (in) :: nat, s (3,3,48), irt (48, nat), isym
-  ! input: the number of atoms
-  ! input: the symmetry matrices
-  ! input: the rotated of each atom
-  ! input: the small group of q
-
-  real(DP), intent (in) :: xq (3), rtau (3, 48, nat), at (3, 3), bg (3, 3)
-  ! input: the coordinates of q
-  ! input: the R associated at each r
-  ! input: direct lattice vectors
-  ! input: reciprocal lattice vectors
-
+  !
+  integer, intent (in) :: nat
+  !! input: the number of atoms
+  integer, intent (in) :: s(3,3,48)
+  !! input: the symmetry matrices
+  integer, intent (in) :: irt(48,nat)
+  !! input: the rotated of each atom
+  integer, intent (in) :: isym
+  !! input: the small group of q
+  real(DP), intent(in) :: xq(3)
+  !! input: the coordinates of q
+  real(DP), intent(in) :: rtau(3,48,nat)
+  !! input: the R associated at each r
+  real(DP), intent(in) :: at(3,3)
+  !! input: direct lattice vectors
+  real(DP), intent(in) :: bg(3,3)
+  !! input: reciprocal lattice vectors
   complex(DP), intent(in) :: u(3*nat,3*nat)
-  ! input: patterns
+  !! input: patterns
   complex(DP), intent(inout) :: phi(3*nat,3*nat)
-  ! input: matrix to be symmetrized , output: symmetrized matrix
-
+  !! input: matrix to be symmetrized , output: symmetrized matrix
+  !
+  ! ... local variables
+  !
   integer :: i, j, icart, jcart, na, nb, mu, nu, sna, snb, &
        ipol, jpol, lpol, kpol
   ! counters
   real(DP) :: arg
   !
-  complex(DP) :: fase, work, phi1(3,3,nat,nat), phi2(3,3,nat,nat)
+  complex(DP) :: fase, work, phi0(3*nat,3*nat), phi1(3,3,nat,nat), phi2(3,3,nat,nat)
   ! workspace
   !
   ! First we transform to cartesian coordinates
   !
+  phi0 = matmul(u, matmul(phi, conjg(transpose(u))))
   do i = 1, 3 * nat
      na = (i - 1) / 3 + 1
      icart = i - 3 * (na - 1)
      do j = 1, 3 * nat
         nb = (j - 1) / 3 + 1
         jcart = j - 3 * (nb - 1)
-        work = (0.d0, 0.d0)
-        do mu = 1, 3 * nat
-           do nu = 1, 3 * nat
-              work = work + u(i,mu) * phi(mu,nu) * conjg(u(j,nu))
-           enddo
-        enddo
-        phi1(icart,jcart,na,nb) = work
+        phi1(icart,jcart,na,nb) = phi0(i,j)
      enddo
   enddo
   !

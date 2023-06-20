@@ -29,8 +29,6 @@ PROGRAM lr_main
                                   & d0psi, LR_iteration, LR_polarization, &
                                   & plot_type, no_hxc, nbnd_total, project, F,R, &
                                   & itermax_int, revc0, lr_io_level, code1
-  USE io_files,              ONLY : nd_nmbr
-  USE global_version,        ONLY : version_number
   USE charg_resp,            ONLY : lr_calc_w_T, read_wT_beta_gamma_z, lr_project_init,&
                                   & lr_dump_rho_tot_compat1, lr_dump_rho_tot_cube,&
                                   & lr_dump_rho_tot_xyzd,lr_dump_rho_tot_xcrys,&
@@ -43,10 +41,18 @@ PROGRAM lr_main
   USE wvfct,                 ONLY : nbnd
   USE wavefunctions,  ONLY : psic
   USE check_stop,            ONLY : check_stop_now, check_stop_init
-  USE funct,                 ONLY : dft_is_hybrid
+  USE xc_lib,                ONLY : xclib_dft_is
   USE fft_base,              ONLY : dffts
   USE uspp,                  ONLY : okvan
   USE mp_bands,              ONLY : ntask_groups
+  USE control_flags,         ONLY : use_gpu
+  !
+#if defined (__ENVIRON)
+  USE plugin_flags,          ONLY : use_environ
+  USE environ_base_module,   ONLY : print_environ_summary
+#endif
+  !
+  USE control_flags,         ONLY : use_gpu
   !
   IMPLICIT NONE
   !
@@ -57,6 +63,7 @@ PROGRAM lr_main
   LOGICAL            :: rflag
   COMPLEX(kind=dp)   :: temp
   LOGICAL, EXTERNAL  :: test_restart
+  LOGICAL, EXTERNAL  :: check_gpu_support
   !
   pol_index = 1
   !
@@ -72,6 +79,8 @@ PROGRAM lr_main
      WRITE(stdout,'("<lr_main>")')
   ENDIF
   !
+  use_gpu = check_gpu_support()
+  !
   ! Reading input file and PWSCF xml, some initialisation;
   ! Read the input variables for TDDFPT;
   ! Allocate space for all quantities already computed
@@ -82,7 +91,9 @@ PROGRAM lr_main
   !
   ! Writing a summary of plugin variables
   !
-  CALL plugin_summary()
+#if defined (__ENVIRON)
+  IF (use_environ) CALL print_environ_summary()
+#endif
   !
   CALL check_stop_init()
   !
@@ -292,7 +303,7 @@ SUBROUTINE lr_print_preamble()
     
     USE lr_variables,        ONLY : no_hxc, d0psi_rs
     USE uspp,                ONLY : okvan
-    USE funct,               ONLY : dft_is_hybrid
+    USE xc_lib,              ONLY : xclib_dft_is
     USE martyna_tuckerman,   ONLY : do_comp_mt
     USE control_flags,       ONLY : do_makov_payne
 
@@ -321,7 +332,7 @@ SUBROUTINE lr_print_preamble()
     !
     IF (no_hxc)  THEN
        WRITE(stdout,'(5x,"No Hartree/Exchange/Correlation")')
-    ELSEIF (dft_is_hybrid() .AND. .NOT.d0psi_rs) THEN
+    ELSEIF (xclib_dft_is('hybrid') .AND. .NOT.d0psi_rs) THEN
        WRITE(stdout, '(/5x,"Use of exact-exchange enabled. Note the EXX correction to the [H,X]", &
                      & /5x,"commutator is NOT included hence the f-sum rule will be violated.",   &
                      & /5x,"You can try to use the variable d0psi_rs=.true. (see the documentation).")' )

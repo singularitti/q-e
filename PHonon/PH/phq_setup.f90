@@ -8,45 +8,46 @@
 !-----------------------------------------------------------------------
 subroutine phq_setup
   !-----------------------------------------------------------------------
+  !! This subroutine prepares several variables which are needed in the
+  !! \(\texttt{phonon}\) program:  
+  !! 1) computes the total local potential (external+scf) on the smooth
+  !!    grid to be used in \(\texttt{h_psi}\) and similia;  
+  !! 2) computes the local magnetization (if necessary);  
+  !! 3) computes dmuxc (with GC if needed);  
+  !! 4) set the inverse of every matrix invs;  
+  !! 5) for metals sets the occupied bands;  
+  !! 6) computes \(\text{alpha_pv}\);  
+  !! 7) computes the variables needed to pass to the pattern representation:  
+  !!    \(\text{u}\):       the patterns;  
+  !!    \(\text{t}\):       the matrices of the small group of q on the pattern basis;  
+  !!    \(\text{tmq}\):     the matrix of the symmetry which sends \(q\rightarrow -q+G\);  
+  !!    \(\text{gi}\):      the G associated to each symmetry operation;  
+  !!    \(\text{gimq}\):    the G of the \(q\rightarrow -q+G\) symmetry;  
+  !!    \(\text{nsymq}\):   the order of the small group of \(q\);  
+  !!    \(\text{irotmq}\):  the index of the \(q\rightarrow -q+G\) symmetry;  
+  !!    \(\text{nirr}\):    the number of irreducible representation;  
+  !!    \(\text{npert}\):   the dimension of each irreducible representation;  
+  !!    \(\text{nmodes}\):  the number of modes;  
+  !!    \(\text{minus_q}\): true if there is a symmetry sending \(q\rightarrow -q+G\);  
+  !! 8) for testing purposes it sets \(\text{ubar}\);  
+  !! 9) set the variables needed to deal with \(\text{nlcc}\);  
+  !! 10) set the variables needed for the partial computation
+  !      of the dynamical matrix.
   !
-  !  This subroutine prepares several variables which are needed in the
-  !  phonon program:
-  !  1) computes the total local potential (external+scf) on the smooth
-  !     grid to be used in h_psi and similia
-  !  2) computes the local magnetization (if necessary)
-  !  3) computes dmuxc (with GC if needed)
-  !  4) set the inverse of every matrix invs
-  !  5) for metals sets the occupied bands
-  !  6) computes alpha_pv
-  !  7) computes the variables needed to pass to the pattern representation
-  !     u      the patterns
-  !     t      the matrices of the small group of q on the pattern basis
-  !     tmq    the matrix of the symmetry which sends q -> -q + G
-  !     gi     the G associated to each symmetry operation
-  !     gimq   the G of the q -> -q+G symmetry
-  !     nsymq  the order of the small group of q
-  !     irotmq the index of the q->-q+G symmetry
-  !     nirr   the number of irreducible representation
-  !     npert  the dimension of each irreducible representation
-  !     nmodes the number of modes
-  !     minus_q true if there is a symmetry sending q -> -q+G
-  !  8) for testing purposes it sets ubar
-  !  9) set the variables needed to deal with nlcc
-  !  10) set the variables needed for the partial computation
-  !       of the dynamical matrix
+  !!  IMPORTANT NOTE ABOUT SYMMETRIES:
   !
-  !  IMPORTANT NOTE ABOUT SYMMETRIES:
-  !  nrot  is the number of sym.ops. of the Bravais lattice
-  !        read from data file, only used in set_default_pw
-  !  nsym  is the number of sym.ops. of the crystal symmetry group
-  !        read from data file, should never be changed
-  !  nsymq is the number of sym.ops. of the small group of q
-  !        it is calculated in set_defaults_pw for each q
-  !  The matrices "s" of sym.ops are ordered as follows:
-  !   first the nsymq sym.ops. of the small group of q
-  !   (the ordering is done in subroutine copy_sym in set_defaults_pw),
-  !   followed by the remaining nsym-nsymq sym.ops. of the crystal group,
-  !   followed by the remaining nrot-nsym sym.ops. of the Bravais  group
+  !! * \(\text{nrot}\) is the number of sym.ops. of the Bravais lattice,
+  !!   read from data file, only used in \(\texttt{set_default_pw}\);
+  !! * \(\text{nsym}\) is the number of sym.ops. of the crystal symmetry group,
+  !!   read from data file, should never be changed;
+  !! * \(\text{nsymq}\) is the number of sym.ops. of the small group of q,
+  !!   it is calculated in \(\texttt{set_defaults_pw}\) for each q;
+  !! * The matrices "s" of sym.ops are ordered as follows:
+  !!   first the nsymq sym.ops. of the small group of q
+  !!   (the ordering is done in subroutine \(\texttt{copy_sym} in 
+  !!   \(\texttt{set_defaults_pw}\)),
+  !!   followed by the remaining nsym-nsymq sym.ops. of the crystal group,
+  !!   followed by the remaining nrot-nsym sym.ops. of the Bravais  group.
   !
   !
   USE kinds,         ONLY : DP
@@ -57,15 +58,15 @@ subroutine phq_setup
   USE klist,         ONLY : xk, nks, nkstot
   USE lsda_mod,      ONLY : nspin, starting_magnetization
   USE scf,           ONLY : v, vrs, vltot, kedtau, rho
+  USE dfunct,        ONLY : newd
   USE fft_base,      ONLY : dfftp
   USE gvect,         ONLY : ngm
   USE gvecs,         ONLY : doublegrid
-  USE symm_base,     ONLY : nrot, nsym, s, ftau, irt, t_rev, time_reversal, &
-                            sr, invs, inverse_s, d1, d2, d3
+  USE symm_base,     ONLY : nrot, nsym, s, irt, t_rev, time_reversal, &
+                            sr, invs, inverse_s, d1, d2, d3, check_grid_sym
   USE uspp_param,    ONLY : upf
-  USE uspp,          ONLY : nlcc_any
-  USE spin_orb,      ONLY : domag
-  USE noncollin_module, ONLY : noncolin, m_loc, angle1, angle2, ux
+  USE uspp,          ONLY : nlcc_any, deeq_nc, okvan
+  USE noncollin_module, ONLY : noncolin, domag, m_loc, angle1, angle2, ux
   USE nlcc_ph,       ONLY : drc
   USE control_ph,    ONLY : rec_code, lgamma_gamma, search_sym, start_irr, &
                             last_irr, niter_ph, alpha_mix, all_done,  &
@@ -84,7 +85,7 @@ subroutine phq_setup
   USE ph_restart,    ONLY : ph_writefile, ph_readfile
   USE control_flags, ONLY : modenum, noinv
   USE grid_irr_iq,   ONLY : comp_irr_iq
-  USE funct,         ONLY : dft_is_gradient
+  USE xc_lib,        ONLY : xclib_dft_is
   USE ramanm,        ONLY : lraman, elop, ramtns, eloptns, done_lraman, &
                             done_elop
   USE mp_pools,      ONLY : inter_pool_comm, npool
@@ -95,11 +96,15 @@ subroutine phq_setup
   USE mp,            ONLY : mp_max, mp_min
   USE lr_symm_base,  ONLY : gi, gimq, irotmq, minus_q, invsymq, nsymq, rtau
   USE qpoint,        ONLY : xq, xk_col
+  USE nc_mag_aux,    ONLY : deeq_nc_save
   USE control_lr,    ONLY : lgamma
   USE ldaU,          ONLY : lda_plus_u, Hubbard_U, Hubbard_J0
-  USE ldaU_ph,       ONLY : effU
+  USE ldaU_lr,       ONLY : effU
   USE constants,     ONLY : rytoev
+  USE dvscf_interpolate, ONLY : ldvscf_interpolate, dvscf_interpol_setup
+  USE ahc,           ONLY : elph_ahc, elph_ahc_setup
 
+  USE el_phon,       ONLY : elph_mat
   implicit none
 
   real(DP) :: sr_is(3,3,48)
@@ -119,7 +124,7 @@ subroutine phq_setup
   call start_clock ('phq_setup')
   ! 0) A few checks
   !
-  IF (dft_is_gradient().and.(lraman.or.elop)) call errore('phq_setup', &
+  IF (xclib_dft_is('gradient').and.(lraman.or.elop)) call errore('phq_setup', &
      'third order derivatives not implemented with GGA', 1)
 
   IF (nsymq==0) CALL errore('phq_setup', &
@@ -134,7 +139,7 @@ subroutine phq_setup
   !
   ! 1) Computes the total local potential (external+scf) on the smooth grid
   !
-!!!!!!!!!!!!!!!!!!!!!!!! ACFDT TEST !!!!!!!!!!!!!!!!
+!************************ ACFDT TEST ***********************
 !  write(*,*) " acfdt_is_active ",acfdt_is_active, " acfdt_num_der ", acfdt_num_der
   IF (acfdt_is_active) THEN
      ! discard set_vrs for numerical derivatives
@@ -144,7 +149,7 @@ subroutine phq_setup
   ELSE
      call set_vrs (vrs, vltot, v%of_r, kedtau, v%kin_r, dfftp%nnr, nspin, doublegrid)
   ENDIF
-!!!!!!!!!!!!!!!!!!!!!!!!END OF  ACFDT TEST !!!!!!!!!!!!!!!!
+!************************END OF  ACFDT TEST ******************
   !
   ! Set non linear core correction stuff
   !
@@ -166,7 +171,20 @@ subroutine phq_setup
                       COS( angle1(ityp(na)) )
      END DO
      ux=0.0_DP
-     if (dft_is_gradient()) call compute_ux(m_loc,ux,nat)
+     if (xclib_dft_is('gradient')) call compute_ux(m_loc,ux,nat)
+     IF (okvan) THEN
+!
+!  Change the sign of the magnetic field in the screened US coefficients
+!  and save also the coefficients computed with -B_xc.
+!
+        deeq_nc_save(:,:,:,:,1)=deeq_nc(:,:,:,:)
+        v%of_r(:,2:4)=-v%of_r(:,2:4)
+        CALL newd()
+        v%of_r(:,2:4)=-v%of_r(:,2:4)
+        deeq_nc_save(:,:,:,:,2)=deeq_nc(:,:,:,:)
+        deeq_nc(:,:,:,:)=deeq_nc_save(:,:,:,:,1)
+        !$acc update device(deeq_nc)
+     ENDIF
   ENDIF
   !
   ! 3) Computes the derivative of the XC potential
@@ -177,19 +195,21 @@ subroutine phq_setup
   !
   call setup_dgc()
   !
-  ! 4) Computes the inverse of each matrix of the crystal symmetry group
+  ! 4) Computes the number of occupied bands for each k point
   !
-  call inverse_s()
-  !
-  ! 5) Computes the number of occupied bands for each k point
-  !
+  if(.not.elph_mat)&
   call setup_nbnd_occ()
   !
-  ! 6) Computes alpha_pv
+  ! 5) Computes alpha_pv
   !
+  if(.not.elph_mat)&
   call setup_alpha_pv()
   !
-  ! 7) set all the variables needed to use the pattern representation
+  ! 6) Set all symmetries and variables needed to use the pattern representation
+  !
+  call inverse_s()
+  IF ( .NOT. check_grid_sym (dfftp%nr1,dfftp%nr2,dfftp%nr3) ) &
+          CALL errore('phq_setup','FFT grid incompatible with symmetry',1)
   !
   magnetic_sym = noncolin .AND. domag
   time_reversal = .NOT. noinv .AND. .NOT. magnetic_sym
@@ -429,12 +449,18 @@ subroutine phq_setup
      ! Initialize d1, d2, d3 to rotate the spherical harmonics
      !
      CALL d_matrix (d1, d2, d3)
-     ! 
-     ! Calculate the offset of beta functions for all atoms. 
-     !
-     CALL setup_offset_beta()
      !
   ENDIF
+  !
+  ! dVscf Fourier interpolation
+  !
+  IF (ldvscf_interpolate) THEN
+    CALL dvscf_interpol_setup()
+  ENDIF
+  !
+  ! AHC e-ph coupling
+  !
+  IF (elph_ahc) CALL elph_ahc_setup()
   !
   CALL stop_clock ('phq_setup')
   !

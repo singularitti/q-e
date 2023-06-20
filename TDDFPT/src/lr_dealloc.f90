@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2016 Quantum ESPRESSO group
+! Copyright (C) 2001-2019 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -24,8 +24,7 @@ SUBROUTINE lr_dealloc()
                            & w_T_zeta_store, chi, rho_1_tot, rho_1_tot_im
   USE lr_exx_kernel,  ONLY : lr_exx_dealloc
   USE becmod,         ONLY : bec_type, becp, deallocate_bec_type
-  USE lrus,           ONLY : int3, int3_nc, becp1, &
-                           & bbg, bbk, bbnc
+  USE lrus,           ONLY : int3, int3_nc, becp1, bbg, bbk, bbnc
   USE qpoint,         ONLY : ikks, ikqs, eigqts
   USE eqv,            ONLY : dmuxc, evq, dpsi, dvpsi
   USE control_lr,     ONLY : nbnd_occ
@@ -94,6 +93,19 @@ SUBROUTINE lr_dealloc()
   IF (allocated(beta_store))  DEALLOCATE(beta_store)
   IF (allocated(gamma_store)) DEALLOCATE(gamma_store)
   IF (allocated(zeta_store))  DEALLOCATE(zeta_store)
+  !
+  ! Magnons variables
+  !
+  IF (allocated(V0psi))               DEALLOCATE(V0psi)  
+  IF (allocated(O_psi))               DEALLOCATE(O_psi)
+  IF (allocated(evc1_rgt_old))        DEALLOCATE(evc1_rgt_old)
+  IF (allocated(evc1_rgt))            DEALLOCATE(evc1_rgt)
+  IF (allocated(evc1_rgt_new))        DEALLOCATE(evc1_rgt_new)
+  IF (allocated(evc1_lft_old))        DEALLOCATE(evc1_lft_old)
+  IF (allocated(evc1_lft))            DEALLOCATE(evc1_lft)
+  IF (allocated(evc1_lft_new))        DEALLOCATE(evc1_lft_new)
+  IF (allocated(alpha_magnons_store)) DEALLOCATE(alpha_magnons_store)
+  IF (allocated(gamma_magnons_store)) DEALLOCATE(gamma_magnons_store)
   !
   ! Response charge density related
   !

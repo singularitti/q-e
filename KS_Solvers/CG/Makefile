@@ -1,16 +1,15 @@
-# Makefile for DAVID
+# Makefile for CG
 
 include ../../make.inc
 
 # location of needed modules and included files (if any)
-MODFLAGS= $(MOD_FLAG) ../../ELPA/src $(MOD_FLAG) ../../LAXlib $(MOD_FLAG) ../../UtilXlib $(MOD_FLAG).
+MODFLAGS= $(MOD_FLAG) ../../LAXlib $(MOD_FLAG) ../../UtilXlib $(MOD_FLAG).
 
 CG = \
 ccgdiagg.o \
 rcgdiagg.o \
-cg_param.o \
-rotate_wfc_gamma.o \
-rotate_wfc_k.o 
+rcgdiagg_gpu.o \
+ccgdiagg_gpu.o
 
 all : libcg.a
 

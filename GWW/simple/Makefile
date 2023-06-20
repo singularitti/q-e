@@ -22,11 +22,8 @@ SIMPLEOBJS = \
   commutator.o 
 
 
-QEMODS = ../../Modules/libqemod.a ../../FFTXlib/libqefft.a \
-        ../../KS_Solvers/libks_solvers.a \
-	../../LAXlib/libqela.a ../../UtilXlib/libutil.a
-
-PWOBJS = ../../PW/src/libpw.a
+QEMODS = $(BASEMODS)
+PWOBJS = ../../PW/src/libpw.a ../../KS_Solvers/libks_solvers.a ../../dft-d3/libdftd3qe.a 
 GWWOBJ = ../gww/libgww.a
 
 TLDEPS= pwlibs gwwlib
@@ -35,7 +32,7 @@ all : tldeps simple.x
 
 simple.x : simple.o libsimple.a  $(SIMPLEOBJS) $(PWOBJS) $(QEMODS) $(GWWOBJ)
 	$(LD) $(LDFLAGS) -o $@ \
-		simple.o libsimple.a $(PWOBJS) $(GWWOBJ) $(QEMODS) $(LIBOBJS) $(QELIBS) $(LIBMIN)
+		simple.o libsimple.a $(PWOBJS) $(GWWOBJ) $(QEMODS) $(QELIBS) $(LIBMIN)
 	- ( cd ../../bin ; ln -fs ../GWW/simple/$@ . )
 
 tldeps :

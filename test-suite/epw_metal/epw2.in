@@ -5,15 +5,14 @@
   outdir      = './'
 
   elph        = .true.
-  kmaps       = .false.
   epbwrite    = .true.
   epbread     = .false.
-
   epwwrite    = .true.
   epwread     = .false.
+  vme         = 'dipole'
 
   nbndsub     =  4
-  nbndskip    =  5
+  bands_skipped = 'exclude_bands = 1-5'
 
   wannierize  = .true.
   num_iter    = 300
@@ -43,11 +42,11 @@
   lifc        = .true.
   asr_typ     = 'crystal'
 
-
-  fsthick     = 6 ! eV
-  eptemp      = 300 ! K
-  degaussw    = 0.1  ! eV
-  degaussq    = 0.05 ! meV
+  fsthick      = 6 ! eV
+  temps        = 300 ! K
+  degaussw     = 0.1  ! eV
+  degaussq     = 0.05 ! meV
+  assume_metal = .true.
 
   dvscf_dir   = './save'
 
@@ -67,8 +66,3 @@
   nq2         = 3
   nq3         = 3
  /
-      4 cartesian
-  0.000000000000   0.000000000000   0.000000000000 
- -0.333333333333   0.333333333333  -0.333333333333 
-  0.000000000000   0.666666666667   0.000000000000 
-  0.666666666667   0.000000000000   0.666666666667 

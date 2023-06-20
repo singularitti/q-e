@@ -7,7 +7,7 @@
 !
 Module dynamicalq
   !
-  ! All variables read from file that need dynamical allocation
+  !! All variables read from file that need dynamical allocation.
   !
   USE kinds, ONLY: DP
   COMPLEX(DP), ALLOCATABLE :: phiq(:,:,:,:,:)
@@ -18,18 +18,21 @@ end module
 !-----------------------------------------------------------------------
 subroutine write_dyn_on_file (xq, phi, nat, iudyn)
   !-----------------------------------------------------------------------
+  !! Write on file the dynamical matrix.
+  !
   USE kinds, only : DP
   implicit none
-  ! input variables
-  integer :: iudyn, nat
-  ! unit number
-  ! number of atom in the unit cell
-  complex(DP) :: phi (3, 3, nat, nat)
-  !  the dynamical matrix
+  !
+  integer :: iudyn
+  !! unit number
+  integer :: nat
+  !! number of atom in the unit cell
+  complex(DP) :: phi(3,3,nat,nat)
+  !! the dynamical matrix
   real(DP) :: xq (3)
-  ! the q vector
+  !! the q vector
+  !
   ! local variables
-
   integer :: na, nb, icar, jcar
   ! counters on atoms
   ! cartesian coordinate counters
@@ -38,8 +41,7 @@ subroutine write_dyn_on_file (xq, phi, nat, iudyn)
      do nb = 1, nat
         write (iudyn, '(2i5)') na, nb
         do icar = 1, 3
-!           write (iudyn, '(3e24.12)') (phi(icar,jcar,na,nb), jcar=1,3)
-           write (iudyn, '(3(2f12.8,2x))') (phi(icar,jcar,na,nb), jcar=1,3)
+           write (iudyn, '(3(2(f12.8,1x),2x))') (phi(icar,jcar,na,nb), jcar=1,3)
         enddo
      enddo
   enddo
@@ -51,11 +53,11 @@ end subroutine write_dyn_on_file
 
 
   SUBROUTINE write_old_dyn_mat_head(iudyn)
-!
-!  This routine is here for compatibility with the old code.
-!  It will be removed when the xml file format of the dynamical matrix
-!  will be tested.
-!
+  !
+  !! This routine is here for compatibility with the old code.
+  !! It will be removed when the xml file format of the dynamical matrix
+  !! will be tested.
+  !
   USE constants, ONLY: amu_ry
   USE ions_base, ONLY : ntyp => nsp, nat, ityp, tau, atm, amass
   USE cell_base, ONLY : ibrav, celldm, at
@@ -67,7 +69,7 @@ end subroutine write_dyn_on_file
 
   WRITE (iudyn, '("Dynamical matrix file")')
   WRITE (iudyn, '(a)') title
-  WRITE (iudyn, '(i3,i5,i3,6f11.7)') ntyp, nat, ibrav, celldm
+  WRITE (iudyn, '(i3,i5,i4,6f12.7)') ntyp, nat, ibrav, celldm
   IF (ibrav==0) THEN
      WRITE (iudyn,'("Basis vectors")')
      WRITE (iudyn,'(2x,3f15.9)') ((at(i,j),i=1,3),j=1,3)
@@ -87,6 +89,7 @@ end subroutine write_dyn_on_file
 SUBROUTINE read_dyn_from_file( nqs, xq, epsil, lrigid, &
                                ntyp, nat, ibrav, celldm, at, atm, amass )
   !----------------------------------------------------------------------------
+  !! Read dynamical matrix from file.
   !
   USE kinds, ONLY : DP
   USE dynamicalq, ONLY: phiq, tau, ityp, zeu

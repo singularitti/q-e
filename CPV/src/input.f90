@@ -117,6 +117,7 @@ MODULE input
    !-------------------------------------------------------------------------
    SUBROUTINE set_control_flags()
      !-------------------------------------------------------------------------
+     !! Set internal flags according to the input.
      !
      USE io_global,     ONLY : stdout
      USE autopilot,     ONLY : auto_check
@@ -199,8 +200,6 @@ MODULE input
                                     epol2_       => epol2,     &
                                     efield2_     => efield2
      !
-     USE uspp_param,         ONLY : nvb
-     !
      USE input_parameters,   ONLY: &
         electron_dynamics, electron_damping, electron_temperature,   &
         ion_dynamics, ekin_conv_thr, etot_conv_thr, forc_conv_thr, ion_maxstep,&
@@ -214,8 +213,13 @@ MODULE input
         orthogonalization, electron_velocities, nat, rd_if_pos,                &
         tefield, epol, efield, tefield2, epol2, efield2, remove_rigid_rot,     &
         iesr, saverho, rd_for, assume_isolated, wf_collect,                    &
-        memory, ref_cell, tcpbo, max_seconds
-     USE funct,              ONLY : dft_is_hybrid
+        memory, ref_cell, tcpbo, max_seconds, pre_state
+     USE xc_lib,             ONLY : xclib_dft_is
+     !
+#if defined (__ENVIRON)
+     USE plugin_flags,        ONLY : use_environ
+     USE environ_base_module, ONLY : read_environ_input, init_environ_setup
+#endif
      !
      IMPLICIT NONE
      !
@@ -282,7 +286,7 @@ MODULE input
              TRIM( calculation ) == 'vc-cp-wf'   .OR. &
              TRIM( calculation ) == 'cp-wf-nscf')
      lwfnscf     = ( TRIM( calculation ) == 'cp-wf-nscf' )
-     lwfpbe0nscf = ( dft_is_hybrid() .AND. lwfnscf  )
+     lwfpbe0nscf = ( xclib_dft_is('hybrid') .AND. lwfnscf  )
 !====================================================================
 
      !
@@ -694,8 +698,15 @@ MODULE input
       force_pairing_ = force_pairing
 
       ! ... having set all input keywords, read plugins' input file(s)
-
-      CALL plugin_read_input()
+#if defined(__LEGACY_PLUGINS)
+  CALL plugin_read_input()
+#endif 
+#if defined (__ENVIRON)
+      IF (use_environ) THEN
+         CALL read_environ_input()
+         CALL init_environ_setup()
+      END IF
+#endif
 
       !
       ! ... the 'ATOMIC_SPECIES' card must be present, check it
@@ -720,6 +731,7 @@ MODULE input
    !-------------------------------------------------------------------------
    SUBROUTINE modules_setup()
      !-------------------------------------------------------------------------
+     !! Call the module specific setup routine.
      !
      USE input_parameters, ONLY: ibrav , celldm , trd_ht, dt,                 &
            rd_ht, a, b, c, cosab, cosac, cosbc, ntyp , nat ,                  &
@@ -728,7 +740,7 @@ MODULE input
            ecutrho, ecfixed, qcutz, q2sigma, tk_inp, wmass,                   &
            ion_radius, emass, emass_cutoff, temph, fnoseh, nr1b, nr2b, nr3b,  &
            tempw, fnosep, nr1, nr2, nr3, nr1s, nr2s, nr3s, ekincw, fnosee,    &
-           outdir, prefix, nkstot, xk, vdw_table_name,                        &
+           outdir, prefix, nkstot, xk,                                        &
            occupations, n_inner, fermi_energy, rotmass, occmass,              &
            rotation_damping, occupation_damping, occupation_dynamics,         &
            rotation_dynamics, degauss, smearing, nhpcl, nhptyp, ndega,        &
@@ -740,7 +752,7 @@ MODULE input
            etot_conv_thr, ekin_conv_thr, nspin, f_inp, nbnd,                   &
            press, cell_damping, cell_dofree, tf_inp,                           &
            refg, greash, grease, greasp, epol, efield, tcg, maxiter, conv_thr, &
-           passop, tot_charge, tot_magnetization, niter_cg_restart
+           passop, tot_charge, tot_magnetization, niter_cg_restart, pre_state
      !
      USE input_parameters, ONLY : wf_efield, wf_switch, sw_len, efx0, efy0,    &
                                   efz0, efx1, efy1, efz1, wfsd, wfdt, maxwfdt, &
@@ -755,6 +767,7 @@ MODULE input
                                   exx_ps_rcut_s=>exx_ps_rcut_self,&
                                   exx_me_rcut_s=>exx_me_rcut_self,&
                                   exx_ps_rcut_p=>exx_ps_rcut_pair,&
+                                  texx_cube=>exx_use_cube_domain,&
                                   exx_me_rcut_p=>exx_me_rcut_pair
 !===============================================================
      !
@@ -764,10 +777,11 @@ MODULE input
                                   step_rad, Surf_t, dthr, R_j, h_j,   &
                                   delta_eps, delta_sigma, n_cntr,     &
                                   axis
-     USE input_parameters, ONLY : lda_plus_u, Hubbard_U
+     USE input_parameters, ONLY : lda_plus_u, Hubbard_U, Hubbard_l, Hubbard_n
      USE input_parameters, ONLY : step_pen, A_pen, alpha_pen, sigma_pen
      USE input_parameters, ONLY : vdw_corr, london, london_s6, london_rcut, &
                                   ts_vdw, ts_vdw_isolated, ts_vdw_econv_thr
+     USE input_parameters, ONLY : exx_fraction, screening_parameter
      !
      USE constants,        ONLY : amu_au, pi
      USE control_flags,    ONLY : lconstrain, tpre, thdyn, tksw
@@ -793,18 +807,17 @@ MODULE input
      USE ensemble_dft,     ONLY : ensemble_initval,tens
      USE wannier_base,     ONLY : wannier_init
      USE efield_module,    ONLY : tefield
-     USE funct,            ONLY : dft_is_nonlocc, get_inlc
-     USE kernel_table,     ONLY : vdw_table_name_ => vdw_table_name, &
-                                  initialize_kernel_table
+     USE funct,            ONLY : dft_is_nonlocc
      USE control_flags,    ONLY : llondon, ts_vdw_ => ts_vdw
      USE london_module,    ONLY : init_london, scal6, lon_rcut
      USE tsvdw_module,     ONLY : vdw_isolated, vdw_econv_thr
+     USE xc_lib,           ONLY : xclib_set_exx_fraction, set_screening_parameter
      !
      IMPLICIT NONE
      !
      REAL(DP) :: alat_ , massa_totale
      ! ...   DIIS
-     INTEGER :: ia, iss, inlc
+     INTEGER :: ia, iss
      LOGICAL :: ltest
      !
      !   Subroutine Body
@@ -880,8 +893,7 @@ MODULE input
 
      CALL efield_init( epol, efield )
 
-     CALL cg_init( tcg , maxiter , conv_thr , passop ,niter_cg_restart)
-
+     CALL cg_init( tcg, maxiter, conv_thr, passop, niter_cg_restart, pre_state)
      !
      IF( ( TRIM( sic ) /= 'none' ) .and. ( tpre .or. thdyn ) ) &
         CALL errore( ' module setup ', ' Stress is not yet implemented with SIC ', 1 )
@@ -919,8 +931,8 @@ MODULE input
      CALL wannier_init( wf_efield, wf_switch, sw_len, efx0, efy0, efz0, &
                         efx1, efy1, efz1, wfsd, wfdt, neigh, poisson_eps,&
                         dis_cutoff, exx_ps_rcut_s, exx_me_rcut_s,&
-                        exx_ps_rcut_p, exx_me_rcut_p, vnbsp,&
-                        maxwfdt, wf_q, &
+                        exx_ps_rcut_p, exx_me_rcut_p, texx_cube, &
+                        vnbsp, maxwfdt, wf_q, &
                         wf_friction, nit, nsd, nsteps, tolw, adapt,     &
                         calwf, nwf, wffort, writev, wannier_index,      &
                         restart_mode )
@@ -935,7 +947,7 @@ MODULE input
      !
      ! ... initialize variables for lda+U calculations
      !
-     CALL ldaU_init0 ( ntyp, lda_plus_u, Hubbard_U )
+     CALL ldaU_init0 ( ntyp, lda_plus_u, Hubbard_U, Hubbard_l, Hubbard_n )
      CALL ldaUpen_init( SIZE(sigma_pen), step_pen, sigma_pen, alpha_pen, A_pen )
      !
      !  ... initialize variables for vdW (dispersions) corrections
@@ -978,13 +990,13 @@ MODULE input
         vdw_econv_thr= ts_vdw_econv_thr
      END IF
      !
-     ! ... initialize kernel table for nonlocal functionals
+     ! ... must be done AFTER dft is read from PP files and initialized
+     ! ... or else the two following parameters will be overwritten
      !
-     IF ( dft_is_nonlocc( ) ) THEN
-        vdw_table_name_ = vdw_table_name
-        inlc = get_inlc()
-        call initialize_kernel_table(inlc)
-     ENDIF
+     IF (exx_fraction >= 0.0_DP) CALL xclib_set_exx_fraction (exx_fraction)
+     !
+     IF (screening_parameter >= 0.0_DP) &
+       & CALL set_screening_parameter(screening_parameter)
      !
      RETURN
      !
@@ -996,7 +1008,7 @@ MODULE input
   !
   SUBROUTINE input_info()
 
-    ! this subroutine print to standard output some parameters read from input
+    !! This subroutine print to standard output some parameters read from input.
     ! ----------------------------------------------
 
     USE input_parameters,   ONLY: restart_mode
@@ -1033,6 +1045,8 @@ MODULE input
   !
   SUBROUTINE modules_info()
 
+    !! write to stdout input module information
+  
     USE input_parameters, ONLY: electron_dynamics, electron_temperature, &
       orthogonalization
 
@@ -1051,6 +1065,10 @@ MODULE input
     USE io_global,            ONLY: ionode, stdout
     USE time_step,            ONLY: delt
     !
+#if defined (__ENVIRON)
+    USE plugin_flags,         ONLY : use_environ
+    USE environ_base_module,  ONLY : print_environ_summary
+#endif
     !
     IMPLICIT NONE
 
@@ -1122,7 +1140,9 @@ MODULE input
       !
       !   CALL sic_info()  ! maybe useful
       !
-      CALL plugin_print_info( )
+#if defined (__ENVIRON)
+      IF (use_environ) CALL print_environ_summary()
+#endif
       !
       IF(tefield) call efield_info( ) 
       IF(tefield2) call efield_info2( )

@@ -11,11 +11,12 @@
 !=----------------------------------------------------------------------------=!
      SUBROUTINE interpolate_lambda_x( lambdap, lambda, lambdam )
 !=----------------------------------------------------------------------------=!
+       !! Interpolate new \(\text{lambda}\) at \(t+dt\) from \(\text{lambda}(t)\)
+       !! and \(\text{lambda}(t-dt)\).
+       !
        USE kinds, ONLY: DP
        IMPLICIT NONE
        REAL(DP) :: lambdap(:,:,:), lambda(:,:,:), lambdam(:,:,:) 
-       !
-       ! interpolate new lambda at (t+dt) from lambda(t) and lambda(t-dt):
        !
        lambdap= 2.d0*lambda - lambdam
        lambdam=lambda 
@@ -66,14 +67,14 @@
 !=----------------------------------------------------------------------------=!
   subroutine elec_fakekine_x( ekincm, ema0bg, emass, c0, cm, ngw, n, noff, delt )
 !=----------------------------------------------------------------------------=!
-    !
-    !  This subroutine computes the CP(fake) wave functions kinetic energy
+    !! This subroutine computes the CP(fake) wave functions kinetic energy.
     
     USE kinds,              only : DP
     use mp,                 only : mp_sum
     use mp_global,          only : intra_bgrp_comm, nbgrp, inter_bgrp_comm
     use gvect, only : gstart
     use wave_base,          only : wave_speed2
+    use mp_world, only: mpime
     !
     IMPLICIT NONE
     !
@@ -88,21 +89,26 @@
     real(DP) :: ftmp
     integer  :: i
 
-    ALLOCATE( emainv( ngw ) )
-    emainv = 1.0d0 / ema0bg
-    ftmp = 1.0d0
-    if( gstart == 2 ) ftmp = 0.5d0
-
     ekincm=0.0d0
-    do i = noff, n + noff - 1
-      ekincm = ekincm + 2.0d0 * wave_speed2( c0(:,i), cm(:,i), emainv, ftmp )
-    end do
-    ekincm = ekincm * emass / ( delt * delt )
+
+    IF( ngw > 0 ) THEN
+
+       ALLOCATE( emainv( ngw ) )
+       emainv = 1.0d0 / ema0bg
+       ftmp = 1.0d0
+       if( gstart == 2 ) ftmp = 0.5d0
+
+       do i = noff, n + noff - 1
+         ekincm = ekincm + 2.0d0 * wave_speed2( c0(:,i), cm(:,i), emainv, ftmp )
+       end do
+       ekincm = ekincm * emass / ( delt * delt )
+       DEALLOCATE( emainv )
+
+    END IF
 
     CALL mp_sum( ekincm, intra_bgrp_comm )
     IF( nbgrp > 1 ) &
        CALL mp_sum( ekincm, inter_bgrp_comm )
-    DEALLOCATE( emainv )
 
     return
   end subroutine elec_fakekine_x
@@ -110,8 +116,7 @@
 !=----------------------------------------------------------------------------=!
   subroutine bandsum( bsum, c0, ngw, tbgrp )
 !=----------------------------------------------------------------------------=!
-    !
-    !  This subroutine computes the CP(fake) wave functions kinetic energy
+    !! This subroutine computes the CP(fake) wave functions kinetic energy.
     
     USE kinds,              only : DP
     use mp,                 only : mp_sum
@@ -144,15 +149,15 @@
 
 
 !=----------------------------------------------------------------------------=!
-   SUBROUTINE protate_x ( c0, bec, c0rot, becrot, ngwl, nss, noff, lambda, nrl, &
-                        na, nsp, ish, nh, np_rot, me_rot, comm_rot  )
+   SUBROUTINE protate_x( c0, bec, c0rot, becrot, ngwl, nss, noff, lambda, nrl, &
+                         ityp, nat, ofsbeta, nh, np_rot, me_rot, comm_rot )
 !=----------------------------------------------------------------------------=!
-
-      !  this routine rotates the wave functions using the matrix lambda
-      !  it works with a block-like distributed matrix
-      !  of the Lagrange multipliers ( lambda ).
-      !  no replicated data are used, allowing scalability for large problems.
-      !  the layout of lambda is as follows :
+      !! This routine rotates the wave functions using the matrix \(\text{lambda}\).
+      !! It works with a block-like distributed matrix
+      !! of the Lagrange multipliers ( \(\text{lambda}\) ).  
+      !! No replicated data are used, allowing scalability for large problems.
+      !
+      ! The layout of lambda is as follows:
       !
       !  (PE 0)                 (PE 1)               ..  (PE NPE-1)
       !  lambda(1      ,1:nx)   lambda(2      ,1:nx) ..  lambda(NPE      ,1:nx)
@@ -163,6 +168,7 @@
       !  of 1, ( row 1 to PE 1, row 2 to PE 2, .. row nproc_bgrp+1 to PE 1 and
       !  so on).
       !  nrl = local number of rows
+      !
       !  ----------------------------------------------
 
       ! ... declare modules
@@ -170,14 +176,13 @@
       USE kinds,            ONLY: DP
       USE mp,               ONLY: mp_bcast
       USE mp_global,        ONLY: nproc_bgrp, me_bgrp, intra_bgrp_comm
-      USE dspev_module,     ONLY: pdspev_drv, dspev_drv
 
       IMPLICIT NONE
 
       ! ... declare subroutine arguments
 
       INTEGER, INTENT(IN) :: ngwl, nss, nrl, noff
-      INTEGER, INTENT(IN) :: na(:), nsp, ish(:), nh(:)
+      INTEGER, INTENT(IN) :: ityp(:), nat, ofsbeta(:), nh(:)
       INTEGER, INTENT(IN) :: np_rot, me_rot, comm_rot 
       COMPLEX(DP), INTENT(IN) :: c0(:,:)
       COMPLEX(DP), INTENT(OUT) :: c0rot(:,:)
@@ -225,13 +230,12 @@
                 CALL daxpy(2*ngwl,uu(jl,i),c0(1,j+noff-1),1,c0rot(1,i+noff-1),1)
               END DO
 
-              do is=1,nsp
+              do ia=1,nat
+                 is=ityp(ia)
                  do jv=1,nh(is)
-                    do ia=1,na(is)
-                       jnl=ish(is)+(jv-1)*na(is)+ia
-                       do i = 1, nss
-                          becrot(jnl,i+noff-1) = becrot(jnl,i+noff-1)+ uu(jl, i) * bec( jnl, j+noff-1 )
-                       end do
+                    jnl = ofsbeta(ia) + jv
+                    do i = 1, nss
+                       becrot(jnl,i+noff-1) = becrot(jnl,i+noff-1)+ uu(jl, i) * bec( jnl, j+noff-1 )
                     end do
                  end do
               end do
@@ -253,19 +257,19 @@
 !=----------------------------------------------------------------------------=!
    SUBROUTINE crot_gamma2 ( c0rot, c0, ngw, n, noffr, noff, lambda, nx, eig )
 !=----------------------------------------------------------------------------=!
-
-      !  this routine rotates the wave functions to the Kohn-Sham base
-      !  it works with a block-like distributed matrix
-      !  of the Lagrange multipliers ( lambda ).
-      !
+      !! This routine rotates the wave functions to the Kohn-Sham base.
+      !! It works with a block-like distributed matrix
+      !! of the Lagrange multipliers ( \(\text{lambda}\) ).
+      
       ! ... declare modules
 
       USE kinds,            ONLY: DP
       USE mp,               ONLY: mp_bcast
       USE mp_global,        ONLY: nproc_bgrp, me_bgrp, intra_bgrp_comm
-      USE dspev_module,     ONLY: dspev_drv
 
       IMPLICIT NONE
+
+      include 'laxlib.fh'
 
       ! ... declare subroutine arguments
 
@@ -322,10 +326,10 @@
 !=----------------------------------------------------------------------------=!
    SUBROUTINE proj_gamma( a, b, ngw, n, noff, lambda)
 !=----------------------------------------------------------------------------=!
-
-        !  projection A=A-SUM{B}<B|A>B
-        !  no replicated data are used, allowing scalability for large problems.
-        !  The layout of lambda is as follows :
+        !! Projection \( A = A-\sum_B \langle B | A \rangle B \).
+        !! No replicated data are used, allowing scalability for large problems.
+        !
+        ! The layout of lambda is as follows :
         !
         !  (PE 0)                 (PE 1)               ..  (PE NPE-1)
         !  lambda(1      ,1:nx)   lambda(2      ,1:nx) ..  lambda(NPE      ,1:nx)
@@ -391,8 +395,7 @@
 !=----------------------------------------------------------------------------=!
    SUBROUTINE wave_rand_init_x( cm_bgrp, global )
 !=----------------------------------------------------------------------------=!
-
-      !  this routine sets the initial wavefunctions at random
+      !! This routine sets the initial wavefunctions at random.
 
 ! ... declare modules
       USE kinds,              ONLY: DP
@@ -459,6 +462,13 @@
       !
       ! ... assign random values to wave functions
       !
+      ! 2.519 = 4^(2/3), equivalent to keep only (ngw_g/4) values
+      fac = 2.519d0
+      IF( ngw_g/4 < nbsp ) fac = 1.0d0
+      IF( ngw_g   < nbsp ) THEN
+        CALL errore(' wave_rand_init ', ' too few plane waves, linear dependent electronic states! ', 1)
+      END IF
+
       DO ib = 1, nbsp
 
         IF( local ) THEN
@@ -482,7 +492,7 @@
         IF( ibgrp > 0 ) THEN
           DO ig = 1, ngw
             IF( local ) THEN
-               IF( gg(ig) < ggx / 2.519d0 ) THEN  ! 2.519 = 4^(2/3), equivalent to keep only (ngw_g/4) values
+               IF( gg(ig) < ggx / fac ) THEN  
                   rranf1 = rnd( 1, mill(1,ig) ) * rnd( 2, mill(2,ig) ) * rnd( 3, mill(3,ig) )
                   rranf2 = 0.0d0
                   cm_bgrp( ig, ibgrp ) =  ampre * CMPLX( rranf1, rranf2 ,kind=DP) / ( 1.0d0 + gg(ig) )
@@ -594,3 +604,65 @@
       RETURN
     END SUBROUTINE c_bgrp_pack_x
 
+#if defined (__CUDA)
+    SUBROUTINE c_bgrp_expand_gpu_x( c_bgrp )
+      USE kinds,              ONLY: DP
+      USE mp,                 ONLY: mp_sum
+      USE electrons_base,     ONLY: nspin, i2gupdwn_bgrp, nupdwn, iupdwn_bgrp, iupdwn, nupdwn_bgrp
+      USE mp_global,          ONLY: nbgrp, inter_bgrp_comm
+      USE cudafor
+      IMPLICIT NONE
+      COMPLEX(DP), DEVICE :: c_bgrp(:,:)
+      INTEGER :: iss, n1, n2, m1, m2, i
+      IF( nbgrp < 2 ) &
+         RETURN
+      DO iss = nspin, 1, -1
+         n1 = iupdwn_bgrp(iss)
+         n2 = n1 + nupdwn_bgrp(iss) - 1
+         m1 = iupdwn(iss)+i2gupdwn_bgrp(iss) - 1
+         m2 = m1 + nupdwn_bgrp(iss) - 1
+!$cuf kernel do(1) <<<*,*>>>
+         DO i = m2, m1, -1
+            c_bgrp(:,i) = c_bgrp(:,i-m1+n1)
+         END DO
+      END DO
+      DO iss = 1, nspin
+         m1 = iupdwn(iss)+i2gupdwn_bgrp(iss) - 1
+         m2 = m1 + nupdwn_bgrp(iss) - 1
+!$cuf kernel do(1) <<<*,*>>>
+         DO i = iupdwn(iss), m1-1
+            c_bgrp(:,i) = 0.0d0
+         END DO
+!$cuf kernel do(1) <<<*,*>>>
+         DO i = m2+1, iupdwn(iss) + nupdwn(iss) - 1
+            c_bgrp(:,i) = 0.0d0
+         END DO
+      END DO
+      CALL mp_sum( c_bgrp, inter_bgrp_comm )
+      RETURN
+    END SUBROUTINE c_bgrp_expand_gpu_x
+
+
+    SUBROUTINE c_bgrp_pack_gpu_x( c_bgrp )
+      USE kinds,              ONLY: DP
+      USE electrons_base,     ONLY: nspin, i2gupdwn_bgrp, nupdwn, iupdwn_bgrp, iupdwn, nupdwn_bgrp
+      USE mp_global,          ONLY: nbgrp
+      USE cudafor
+      IMPLICIT NONE
+      COMPLEX(DP), DEVICE :: c_bgrp(:,:)
+      INTEGER :: iss, n1, n2, m1, m2, i
+      IF( nbgrp < 2 ) &
+         RETURN
+      DO iss = 1, nspin
+         n1 = iupdwn_bgrp(iss)
+         n2 = n1 + nupdwn_bgrp(iss) - 1
+         m1 = iupdwn(iss)+i2gupdwn_bgrp(iss) - 1
+         m2 = m1 + nupdwn_bgrp(iss) - 1
+!$cuf kernel do(1) <<<*,*>>>
+         DO i = n1, n2
+            c_bgrp(:,i) = c_bgrp(:,i-n1+m1)
+         END DO
+      END DO
+      RETURN
+    END SUBROUTINE c_bgrp_pack_gpu_x
+#endif

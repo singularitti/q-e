@@ -12,33 +12,45 @@ MODULE ensemble_dft
   IMPLICIT NONE
   SAVE
 
-      logical      :: tens       = .false. ! whether to do ensemble calculations.
-      logical      :: tgrand     = .false. ! whether to do grand canonical
-                                           ! ensemble calculations.
-      integer      :: ninner     = 0       ! number of inner loops per CP step.
-      integer      :: ismear     = 2       ! type of smearing:
-                                           !  1 => gaussian
-                                           !  2 => fermi-dirac
-                                           !  3 => hermite-delta_function
-                                           !  4 => gaussian splines
-                                           !  5 => cold smearing i
-                                           !  6 => cold smearing ii
-      real(DP) :: etemp      = 0       ! smearing temperature.
-      real(DP) :: ef         = 0       ! Fermi energy (relevant if tgrand=.true.).
+      logical :: tens = .false.
+      !! whether to do ensemble calculations
+      logical :: tgrand = .false.
+      !! whether to do grand canonical ensemble calculations
+      integer :: ninner = 0
+      !! number of inner loops per CP step
+      integer :: ismear = 2
+      !! type of smearing:  
+      !!  1 => gaussian  
+      !!  2 => Fermi-Dirac  
+      !!  3 => Hermite-delta function  
+      !!  4 => gaussian splines  
+      !!  5 => cold smearing i  
+      !!  6 => cold smearing ii
+      real(DP) :: etemp = 0
+      !! smearing temperature.
+      real(DP) :: ef = 0
+      !! Fermi energy (relevant if tgrand=.true.).
       
-      integer :: niter_cold_restart !frequency for accuarate cold smearing (in iterations)
-      real(DP) :: lambda_cold !step for cold smearing for not accurate iterations     
-      INTEGER :: nrlx    ! first dimension of z0t, fmat0
-      INTEGER :: nrcx    ! first two dimensions of psihpsi
+      integer :: niter_cold_restart
+      !! frequency for accuarate cold smearing (in iterations)
+      real(DP) :: lambda_cold
+      !! step for cold smearing for not accurate iterations     
+      INTEGER :: nrlx
+      !! first dimension of z0t, fmat0
+      INTEGER :: nrcx
+      !! first two dimensions of psihpsi
+      
 !***ensemble-DFT
-      real(DP), allocatable::                 z0t(:,:,:)   ! transpose of z0
-      complex(DP), allocatable::             c0diag(:,:)
-      real(DP), allocatable::               becdiag(:,:)
-      real(DP), allocatable::                      e0(:)
-      real(DP), allocatable::               fmat0(:,:,:)
+      real(DP), allocatable:: z0t(:,:,:)
+      !! transpose of z0
+      complex(DP), allocatable :: c0diag(:,:)
+      real(DP), allocatable :: becdiag(:,:)
+      real(DP), allocatable :: e0(:)
+      real(DP), allocatable :: fmat0(:,:,:)
       real(DP) :: gibbsfe
 ! variables for cold-smearing
-      real(DP), allocatable ::               psihpsi(:,:,:)!it contains the matrix <Psi|H|Psi>
+      real(DP), allocatable :: psihpsi(:,:,:)
+      !! it contains the matrix <Psi|H|Psi>
 
 CONTAINS
 
@@ -78,13 +90,14 @@ CONTAINS
 
 
   SUBROUTINE compute_entropy_der( ex, fx, n, nspin )
+    !! Calculation of the entropy derivative at x.
     implicit none
     real(DP), intent(out) :: ex(:)
     real(DP), intent(in) :: fx(:)
     integer, intent(in) :: n, nspin
     real(DP) :: f2,xx
     integer :: i
-    !     calculation of the entropy derivative at x
+    !     
     do i=1,n
     if ((fx(i).gt.1.0d-200).and.(fx(i).lt.(2.0/DBLE(nspin)-1.0d-200))) then
       ex(i)=(log((2.0d0/DBLE(nspin)-fx(i))/fx(i)))
@@ -105,21 +118,21 @@ CONTAINS
 
 
 
-  SUBROUTINE id_matrix_init( descla, nspin )
-    ! initialization of the matrix identity
-    USE descriptors
+  SUBROUTINE id_matrix_init( idesc, nspin )
+    !! Initialization of the matrix identity.
     IMPLICIT NONE
+    include 'laxlib.fh'
     INTEGER, INTENT(IN) :: nspin
-    TYPE(la_descriptor), INTENT(IN) :: descla( nspin )
+    INTEGER, INTENT(IN) :: idesc( LAX_DESC_SIZE, nspin )
     INTEGER :: is, i, ii
     INTEGER :: np, me
     z0t(:,:,:)=0.0d0
     do is = 1, nspin
-       np = descla( is )%npc * descla( is )%npr
-       me = descla( is )%mype
-       IF( descla( is )%active_node > 0 ) THEN
+       np = idesc( LAX_DESC_NPC, is ) * idesc( LAX_DESC_NPR, is )
+       me = idesc( LAX_DESC_MYPE, is )
+       IF( idesc( LAX_DESC_ACTIVE_NODE, is ) > 0 ) THEN
           ii = me + 1
-          DO i = 1, descla( is )%nrl
+          DO i = 1, idesc( LAX_DESC_NRL, is )
              z0t( i, ii , is ) = 1.d0
              ii = ii + np
           END DO
@@ -129,18 +142,18 @@ CONTAINS
   END SUBROUTINE id_matrix_init
 
 
-  SUBROUTINE h_matrix_init( descla, nspin )
-    ! initialization of the psihpsi matrix 
-    USE descriptors
+  SUBROUTINE h_matrix_init( idesc, nspin )
+    !! initialization of the psihpsi matrix.
     IMPLICIT NONE
+    include 'laxlib.fh'
     INTEGER, INTENT(IN) :: nspin
-    TYPE(la_descriptor), INTENT(IN) :: descla( nspin )
+    INTEGER, INTENT(IN) :: idesc( :, : )
     INTEGER :: is, i, nr
       psihpsi(:,:,:)=0.0d0
       do is = 1, nspin
-         IF( descla( is )%active_node > 0 ) THEN
+         IF( idesc( LAX_DESC_ACTIVE_NODE, is ) > 0 ) THEN
             !
-            nr = descla( is )%nr
+            nr = idesc( LAX_DESC_NR, is )
             !
 !            IF( descla( is )%la_myr == descla( is )%la_myc ) THEN
                DO i = 1, nr
@@ -253,15 +266,14 @@ CONTAINS
   END SUBROUTINE ensemble_dft_info
 
 
-  SUBROUTINE allocate_ensemble_dft( nhsa, n, ngw, nudx, nspin, nx, nrxxs, nat,&
-                                    descla )
-    USE descriptors
+  SUBROUTINE allocate_ensemble_dft( nhsa, n, ngw, nudx, nspin, nx, nrxxs, nat, idesc )
     IMPLICIT NONE
+    include 'laxlib.fh'
     INTEGER, INTENT(IN) :: nhsa, n, ngw, nudx, nspin, nx, nrxxs, nat
-    TYPE(la_descriptor), INTENT(IN) :: descla( nspin )
+    INTEGER, INTENT(IN) :: idesc( :, : )
     
-    nrcx = MAXVAL (descla(:)%nrcx )
-    nrlx = MAXVAL (descla(:)%nrlx )
+    nrcx = MAXVAL (idesc(LAX_DESC_NRCX,:) )
+    nrlx = MAXVAL (idesc(LAX_DESC_NRLX,:) )
     
     allocate(c0diag(ngw,nx))
     allocate(z0t(nrlx,nudx,nspin))

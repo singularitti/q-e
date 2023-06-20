@@ -19,7 +19,7 @@ SUBROUTINE hp_bcast_input ( )
   USE mp_world,         ONLY : world_comm
   USE io_files,         ONLY : tmp_dir, prefix
   USE control_flags,    ONLY : iverbosity
-  USE input_parameters, ONLY : max_seconds
+  USE check_stop,       ONLY : max_seconds
   USE io_global,        ONLY : meta_ionode_id
   USE control_lr,       ONLY : lrpa, ethr_nscf
   USE ldaU_hp,          ONLY : conv_thr_chi, thresh_init, find_atpert, skip_atom,      &
@@ -27,7 +27,7 @@ SUBROUTINE hp_bcast_input ( )
                                background, compute_hp, sum_pertq, perturb_only_atom,   &
                                determine_num_pert_only, skip_equivalence_q, niter_max, &
                                disable_type_analysis, docc_thr, num_neigh, lmin, rmax, &
-                               nmix, nq1, nq2, nq3
+                               nmix, nq1, nq2, nq3, dist_thr, determine_q_mesh_only
   !
   IMPLICIT NONE
   !
@@ -43,6 +43,7 @@ SUBROUTINE hp_bcast_input ( )
   CALL mp_bcast (sum_pertq, meta_ionode_id, world_comm)
   CALL mp_bcast (lrpa, meta_ionode_id, world_comm)
   CALL mp_bcast (determine_num_pert_only, meta_ionode_id, world_comm)
+  CALL mp_bcast (determine_q_mesh_only, meta_ionode_id, world_comm)
   CALL mp_bcast (disable_type_analysis, meta_ionode_id, world_comm)
   !
   ! Integers
@@ -68,6 +69,7 @@ SUBROUTINE hp_bcast_input ( )
   CALL mp_bcast (alpha_mix, meta_ionode_id, world_comm)
   CALL mp_bcast (max_seconds, meta_ionode_id, world_comm)
   CALL mp_bcast (rmax, meta_ionode_id, world_comm)
+  CALL mp_bcast (dist_thr, meta_ionode_id, world_comm)
   !
   ! Characters
   !

@@ -63,11 +63,10 @@ PROGRAM ev
       USE mp,        ONLY : mp_bcast
       USE io_global, ONLY : ionode, ionode_id
       IMPLICIT NONE
-      INTEGER, PARAMETER:: nmaxpar=4, nmaxpt=100, nseek=10000, nmin=4
+      INTEGER, PARAMETER:: nmaxpar=4, nmaxpt=100 
       INTEGER :: npar,npt,istat, ierr
       CHARACTER :: bravais*8, au_unit*3, filin*256
-      REAL(DP) :: par(nmaxpar), deltapar(nmaxpar), parmin(nmaxpar), &
-             parmax(nmaxpar), v0(nmaxpt), etot(nmaxpt), efit(nmaxpt), &
+      REAL(DP) :: par(nmaxpar), v0(nmaxpt), etot(nmaxpt), efit(nmaxpt), &
              fac, emin, chisq, a
       REAL(DP), PARAMETER :: gpa_kbar = 10.0_dp
       LOGICAL :: in_angstrom
@@ -147,24 +146,9 @@ PROGRAM ev
       par(2) = 500.0d0
       par(3) = 5.0d0
       par(4) = -0.01d0
-!
-      parmin(1) = 0.0d0
-      parmin(2) = 0.0d0
-      parmin(3) = 1.0d0
-      parmin(4) = -1.0d0
-!
-      parmax(1) = 100000.d0
-      parmax(2) = 100000.d0
-      parmax(3) = 15.0d0
-      parmax(4) = 0.0d0
-!
-      deltapar(1) = 1.0d0
-      deltapar(2) = 100.d0
-      deltapar(3) = 1.0d0
-      deltapar(4) = 0.01d0
-!
+
       CALL find_minimum &
-           (npar,par,deltapar,parmin,parmax,nseek,nmin,chisq)
+           (npar,par,chisq)
 !
       CALL write_results &
            (npt,in_angstrom,fac,v0,etot,efit,istat,par,npar,emin,chisq, &
@@ -192,13 +176,14 @@ PROGRAM ev
     CONTAINS
 !
 !-----------------------------------------------------------------------
-      SUBROUTINE eqstate(npar,par,chisq)
+      SUBROUTINE eqstate(npar,par,chisq,ediff)
 !-----------------------------------------------------------------------
 !
       IMPLICIT NONE
       INTEGER, INTENT(in) :: npar
       REAL(DP), INTENT(in) :: par(npar)
       REAL(DP), INTENT(out):: chisq
+      REAL(DP), OPTIONAL, INTENT(out):: ediff(npt)
       INTEGER :: i
       REAL(DP) :: k0, dk0, d2k0, c0, c1, x, vol0, ddk
 !
@@ -247,7 +232,8 @@ PROGRAM ev
       DO i = 1,npt
           efit(i) = efit(i)+emin
           chisq   = chisq + (etot(i)-efit(i))**2
-      ENDDO
+          IF(present(ediff)) ediff(i) = efit(i)-etot(i)
+       ENDDO
       chisq = chisq/npt
 !
       RETURN
@@ -380,52 +366,56 @@ PROGRAM ev
  99   RETURN
     END SUBROUTINE write_results
 !
+      
+      ! This subroutine is passed to LMDIF to be minimized
+      ! LMDIF takes as input the difference between f_fit and f_real
+      !       and computes the chi^2 internally.
+      SUBROUTINE EOSDIFF(m_, n_, par_, f_, i_)
+       IMPLICIT NONE
+         INTEGER,INTENT(in)  :: m_, n_
+         INTEGER,INTENT(inout)   :: i_
+         REAL(DP),INTENT(in)    :: par_(n_)
+         REAL(DP),INTENT(out)   :: f_(m_)
+         REAL(DP) :: chisq_
+         !
+         CALL eqstate(n_,par_,chisq_, f_)
+      END SUBROUTINE
+
 !-----------------------------------------------------------------------
-      SUBROUTINE find_minimum &
-         (npar,par,deltapar,parmin,parmax,nseek,nmin,chisq)
+      SUBROUTINE find_minimum(npar,par,chisq)
 !-----------------------------------------------------------------------
 !
-!     Very Stupid Minimization
-!
-      USE random_numbers, ONLY : randy
+      USE lmdif_module, ONLY : lmdif0
       IMPLICIT NONE
-      INTEGER maxpar, nseek, npar, nmin, n,j,i
-      PARAMETER (maxpar=4)
-      REAL(DP) par(npar), deltapar(npar), parmin(npar), parmax(npar), &
-             parnew(maxpar), chisq, chinew, bidon
-!
-!      various initializations
-!
-      chisq = 1.0d30
-      chinew= 1.0d30
+      INTEGER ,INTENT(in)  :: npar
+      REAL(DP),INTENT(out) :: par(nmaxpar)
+      REAL(DP),INTENT(out) :: chisq
+      !
+      REAL(DP) :: vchisq(npar)
+      REAL(DP) :: ediff(npt)
+      INTEGER :: i
+      !
+      par(1) = v0(npt/2)
+      par(2) = 500.0d0
+      par(3) = 5.0d0
+      par(4) = -0.01d0 ! unused for some eos
+      !      
+      CALL lmdif0(EOSDIFF, npt, npar, par, ediff, 1.d-12, i)
+      !
+      IF(i>0 .and. i<5) THEN
+         PRINT*, "Minimization succeeded"
+      ELSEIF(i>=5) THEN
+         PRINT*, "Minimization stopped before convergence"
+      ELSEIF(i<=0) THEN 
+        PRINT*, "Minimization error"
+        STOP
+      ENDIF
+      !
       CALL eqstate(npar,par,chisq)
-      DO j = 1,nmin
-         DO i = 1,nseek
-            DO n = 1,npar
-  10           parnew(n) = par(n) + (0.5d0 - randy())*deltapar(n)
-               IF(parnew(n)>parmax(n) .or. parnew(n)<parmin(n)) &
-               GOTO 10
-            ENDDO
-!
-            CALL eqstate(npar,parnew,chinew)
-!
-            IF(chinew<chisq) THEN
-               DO n = 1,npar
-                  par(n) = parnew(n)
-               ENDDO
-               chisq = chinew
-            ENDIF
-         ENDDO
-         DO n = 1,npar
-            deltapar(n) = deltapar(n)/10.d0
-         ENDDO
-      ENDDO
-!
-      CALL eqstate(npar,par,chisq)
-!
-      RETURN
-    END SUBROUTINE find_minimum
-!
+
+      END SUBROUTINE
+!-----------------------------------------------------------------------
+
   END PROGRAM ev
 
       FUNCTION birch(x,k0,dk0,d2k0)

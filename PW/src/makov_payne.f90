@@ -84,11 +84,15 @@ SUBROUTINE write_dipole( etot, x0, dipole_el, quadrupole_el, qq )
   REAL(DP) :: dipole_ion(3), quadrupole_ion(3), dipole(3), quadrupole(3)
   REAL(DP) :: zvia, zvtot
   REAL(DP) :: corr1, corr2, aa, bb
-  INTEGER  :: ia, ip
+  INTEGER  :: ia, ip, ibrav_mp
+  INTEGER, EXTERNAL :: at2ibrav
   !
-  ! ... Note that the definition of the Madelung constant used here
-  ! ... differs from the "traditional" one found in the literature. See
-  ! ... Lento, Mozos, Nieminen, J. Phys.: Condens. Matter 14 (2002), 2637-2645
+  ! Note that the definition of the Madelung constant used here:
+  !   Lento, Mozos, Nieminen, J. Phys.: Condens. Matter 14 (2002), 2637-2645
+  ! differs from the "traditional" one found in the literature, e.g.:
+  !   Leslie and Gillam https://doi.org/10.1088/0022-3719/18/5/005,
+  !   Dabo et al. at https://doi.org/10.1103/PhysRevB.77.115139:
+  ! because different definitions of the length parameter L are adopted
   !
   REAL(DP), PARAMETER :: madelung(3) = (/ 2.8373D0, 2.8883D0, 2.8885D0 /)
   !
@@ -149,7 +153,9 @@ SUBROUTINE write_dipole( etot, x0, dipole_el, quadrupole_el, qq )
   WRITE( stdout, '( 5X,"    Total quadrupole moment",F20.8," a.u. (Ha)")' ) &
       SUM(quadrupole(:))
   !
-  IF ( ibrav < 1 .OR. ibrav > 3 ) THEN
+  ibrav_mp = ibrav
+  IF ( ibrav .EQ. 0 ) ibrav_mp = at2ibrav(at(:, 1), at(:, 2), at(:, 3))
+  IF ( ibrav_mp < 1 .OR. ibrav_mp > 3 ) THEN
      call errore(' write_dipole', &
                   'Makov-Payne correction defined only for cubic lattices', 1)
      !
@@ -158,7 +164,7 @@ SUBROUTINE write_dipole( etot, x0, dipole_el, quadrupole_el, qq )
   ! ... Makov-Payne correction, PRB 51, 4014 (1995)
   ! ... Note that Eq. 15 has the wrong sign for the quadrupole term
   !
-  corr1 = - madelung(ibrav) / alat * qq**2 / 2.0D0 * e2
+  corr1 = - madelung(ibrav_mp) / alat * qq**2 / 2.0D0 * e2
   !
   aa = SUM(quadrupole(:))
   bb = dipole(1)**2 + dipole(2)**2 + dipole(3)**2
@@ -170,7 +176,7 @@ SUBROUTINE write_dipole( etot, x0, dipole_el, quadrupole_el, qq )
   WRITE( stdout, '(/,5X,"*********    MAKOV-PAYNE CORRECTION    *********")' )
   WRITE( stdout, &
          '(/5X,"Makov-Payne correction with Madelung constant = ",F8.4)' ) &
-      madelung(ibrav)
+      madelung(ibrav_mp)
   !
   WRITE( stdout,'(/5X,"Makov-Payne correction ",F14.8," Ry = ",F6.3, &
        &              " eV (1st order, 1/a0)")'   ) -corr1, -corr1*rytoev

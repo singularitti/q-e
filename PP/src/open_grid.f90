@@ -11,8 +11,7 @@ PROGRAM open_grid
   USE cell_base,  ONLY : at, bg, tpiba2, alat
   USE klist,      ONLY : nks, nkstot, xk, wk, igk_k, ngk, qnorm
   USE io_files,   ONLY : prefix, tmp_dir, nwordwfc, iunwfc, diropn
-  USE noncollin_module,   ONLY : noncolin, m_loc, angle1, angle2, nspin_lsda
-  USE spin_orb,           ONLY : domag
+  USE noncollin_module,   ONLY : noncolin, domag, m_loc, angle1, angle2, nspin_lsda
   USE control_flags,      ONLY : gamma_only
   USE environment,        ONLY : environment_start, environment_end
   USE ions_base,          ONLY : nat, tau, ityp
@@ -23,42 +22,34 @@ PROGRAM open_grid
   USE exx,                ONLY : exxbuff, exxinit, use_ace, ecutfock
   USE gvecw,              ONLY : ecutwfc, gcutw
   USE gvect,              ONLY : g, ngm
-  USE funct,              ONLY : dft_force_hybrid
+  USE xc_lib,             ONLY : dft_force_hybrid
   USE wvfct,              ONLY : nbnd, npwx, g2kin, et, wg
   USE wavefunctions, ONLY : evc
   USE buffers,            ONLY : save_buffer, open_buffer, close_buffer
   USE scf,                ONLY : rho
   USE lsda_mod,           ONLY : nspin, isk, lsda, starting_magnetization
   USE io_rho_xml,         ONLY : write_scf
-  USE input_parameters,   ONLY : nk1, nk2, nk3, k1, k2, k3, k_points, &
-                              occupations, calculation !, nkstot,
   USE noncollin_module,   ONLY : nspin_mag, npol
   USE fft_interfaces,     ONLY : fwfft
   !
-  USE qexsd_module,       ONLY : qexsd_input_obj
-  USE qes_types_module,   ONLY : input_type
   USE fft_base,           ONLY : dffts
-  !USE qexsd_input,        ONLY : qexsd_init_k_points_ibz
   USE control_flags,      ONLY : gamma_only, io_level
   USE start_k, ONLY : init_start_k
   USE extfield,           ONLY : gate
+  USE esm,                ONLY : esm_z_inv
+  USE rism_module,        ONLY : lrism
+  USE command_line_options, ONLY : nband_, ntg_ 
+  USE mp_pools,             ONLY : intra_pool_comm 
+  USE mp_exx,               ONLY : mp_start_exx
   ! 
   IMPLICIT NONE
-  !
-  INTERFACE
-     SUBROUTINE   pw_init_qexsd_input(obj,obj_tagname)
-     IMPORT                       :: input_type
-     TYPE(input_type)             :: obj
-     CHARACTER(LEN=*),INTENT(IN)  :: obj_tagname
-     END SUBROUTINE
-  END INTERFACE
   !
   CHARACTER(LEN=256), EXTERNAL :: trimcheck
   !
   INTEGER :: ios, ik, ibnd, ik_idx, ik_idx_kpt, ik_idx_exx, is, na
   CHARACTER(len=4) :: spin_component
   CHARACTER(len=256) :: outdir
-  !INTEGER :: nq(3)
+  INTEGER :: k1, k2, k3
   LOGICAL :: exst, opnd, exst_mem, magnetic_sym
   REAL(DP),ALLOCATABLE :: et0(:,:), wg0(:,:), yk(:,:), wk0(:)
   INTEGER, EXTERNAL  :: n_plane_waves
@@ -67,9 +58,11 @@ PROGRAM open_grid
   LOGICAL           :: use_ace_back, exx_status_back
   REAL(DP)          :: ecutfock_back
   INTEGER           :: nq_back(3)
+  ! if true do not append '_open' to the prefix
+  LOGICAL  :: overwrite_prefix = .false.
 
   ! these are in wannier module.....-> integer :: ispinw, ikstart, ikstop, iknum
-  NAMELIST / inputpp / outdir, prefix !, nq
+  NAMELIST / inputpp / outdir, prefix, overwrite_prefix !, nq
   !
   ! initialise environment
   !
@@ -101,6 +94,7 @@ PROGRAM open_grid
   CALL mp_bcast(outdir,ionode_id, intra_image_comm)
   CALL mp_bcast(tmp_dir,ionode_id, intra_image_comm)
   CALL mp_bcast(prefix,ionode_id, intra_image_comm)
+  CALL mp_bcast(overwrite_prefix,ionode_id, intra_image_comm)
   !
   WRITE(stdout,*)
   WRITE(stdout,*) ' Reading nscf_save data'
@@ -134,14 +128,16 @@ PROGRAM open_grid
                       COS( angle1(ityp(na)) )
      ENDDO
   ENDIF
-  CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, gate )
+  CALL find_sym ( nat, tau, ityp, magnetic_sym, m_loc, &
+                & gate .OR. (.NOT. esm_z_inv(lrism)) )
 
   nq1 = -1
   nq2 = -1
   nq3 = -1
   ecutfock = 4*ecutwfc
   use_ace = .false.
-  
+ 
+  CALL mp_start_exx (nband_, ntg_, intra_pool_comm)
   CALL exx_grid_init()
   CALL exx_mp_init()
   !
@@ -173,7 +169,9 @@ PROGRAM open_grid
   DEALLOCATE(evc)
   ALLOCATE(evc(npwx*npol,nbnd))
   !
-  prefix = TRIM(prefix)//"_open"
+  if (.not. overwrite_prefix) then
+    prefix = TRIM(prefix)//"_open"
+  end if
   nwordwfc = nbnd * npwx * npol
   CALL open_buffer(iunwfc, 'wfc', nwordwfc, +1, exst_mem, exst)
   !
@@ -213,13 +211,10 @@ PROGRAM open_grid
   DEALLOCATE(psic, et0, wg0)
   !
   ! reconstruct input variables
-  nk1 = nq1
-  nk2 = nq2
-  nk3 = nq3
-  calculation = 'bands'
-  k_points = "automatic"
-  !CALL init_start_k(nk1,nk2,nk3, k1, k2, k3, "automatic",nks/nspin_mag, xk, wk)
-  CALL init_start_k(nk1,nk2,nk3, k1, k2, k3, "automatic",nks/nspin_lsda, xk, wk)
+  k1 = 0
+  k2 = 0
+  k3 = 0
+  CALL init_start_k(nq1,nq2,nq3, k1, k2, k3, "automatic",nks/nspin_lsda, xk, wk)
   !
   ! Restore EXX variables
   use_ace = use_ace_back
@@ -235,7 +230,7 @@ PROGRAM open_grid
   yk = xk
   CALL cryst_to_cart(nks, yk, at, -1)
   WRITE(stdout,'(5x,a)') "Grid of q-points"
-  WRITE(stdout,'(5x,a,3i4)') "Dimensions:", nk1, nk2, nk3
+  WRITE(stdout,'(5x,a,3i4)') "Dimensions:", nq1, nq2, nq3
   WRITE(stdout,'(5x,a,3i4)') "Shift:     ", k1,k2,k3
   WRITE(stdout,'(5x,a)') "List to be put in the .win file of wannier90: &
                           &(already in crystal/fractionary coordinates):"

@@ -8,9 +8,8 @@
 !-----------------------------------------------------------------------
 FUNCTION capital( in_char )  
   !-----------------------------------------------------------------------
-  !
-  ! ... converts character to capital if lowercase
-  ! ... copy character to output in all other cases
+  !! Converts character to capital if lowercase.
+  !! Copy character to output in all other cases.
   !
   IMPLICIT NONE  
   !
@@ -42,9 +41,8 @@ END FUNCTION capital
 !-----------------------------------------------------------------------
 FUNCTION lowercase( in_char )  
   !-----------------------------------------------------------------------
-  !
-  ! ... converts character to lowercase if capital
-  ! ... copy character to output in all other cases
+  !! Converts character to lowercase if capital.
+  !! Copy character to output in all other cases.
   !
   IMPLICIT NONE  
   !
@@ -72,26 +70,3 @@ FUNCTION lowercase( in_char )
   RETURN 
   !
 END FUNCTION lowercase
-!
-!-----------------------------------------------------------------------
-LOGICAL FUNCTION isnumeric ( in_char )  
-  !-----------------------------------------------------------------------
-  !
-  ! ... check if a character is a number
-  !
-  IMPLICIT NONE  
-  !
-  CHARACTER(LEN=1), INTENT(IN) :: in_char
-  CHARACTER(LEN=10), PARAMETER :: numbers = '0123456789'
-  INTEGER                      :: i
-  !
-  !
-  DO i=1, 10
-     !
-     isnumeric = ( in_char == numbers(i:i) )
-     IF ( isnumeric ) RETURN
-     !
-  END DO
-  RETURN 
-  !
-END FUNCTION isnumeric

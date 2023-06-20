@@ -6,23 +6,40 @@
 ! or http://www.gnu.org/copyleft/gpl.txt .
 !
 !----------------------------------------------------------------------------
-
 MODULE rVV10 
- 
+  !--------------------------------------------------------------------------
+  !! This module is modeled after the vdW-DF implementation in
+  !! 'Modules/xc_vdW_DF.f90'. See that file for references, explanations, and
+  !! many useful comments.
+
   USE kinds,             ONLY : dp
-  USE constants,         ONLY : pi, e2
-  USE kernel_table,      ONLY : q_mesh, Nr_points, Nqs, r_max
-  USE mp,                ONLY : mp_bcast, mp_sum, mp_barrier
+  USE constants,         ONLY : pi
+  USE mp,                ONLY : mp_sum
   USE mp_bands,          ONLY : intra_bgrp_comm
-  USE io_global,         ONLY : ionode
+  USE io_global,         ONLY : ionode, stdout
   USE fft_base,          ONLY : dfftp
   USE fft_interfaces,    ONLY : fwfft, invfft 
   USE control_flags,     ONLY : gamma_only, iverbosity
-  USE io_global,         ONLY : stdout
- 
+
   IMPLICIT NONE
-  
-  real(dp), parameter :: epsr = 1.d-12, epsg = 1.D-10
+  SAVE
+
+  real(dp), parameter :: epsr      = 1.d-12
+  real(dp), parameter :: epsg      = 1.D-10
+  integer,  parameter :: Nr_points = 1024
+  real(dp), parameter :: r_max     = 100.0D0
+  real(dp), parameter :: dr        = r_max/Nr_points
+  real(dp), parameter :: dk        = 2.0D0*pi/r_max
+  real(dp), parameter :: q_min     = 1.0D-4
+  real(dp), parameter :: q_cut     = 0.5D0
+  integer,  parameter :: Nqs       = 20
+  real(dp), parameter, dimension(Nqs):: q_mesh= (/ q_min, 3.0D-4, 5.893850845618885D-4, 1.008103720396345D-3, &
+            1.613958359589310D-3, 2.490584839564653D-3, 3.758997979748929D-3, 5.594297198907115D-3, &
+            8.249838297569416D-3, 1.209220822453922D-2, 1.765183095571029D-2, 2.569619042667097D-2, &
+            3.733577865542191D-2, 5.417739477463518D-2, 7.854595729872216D-2, 0.113805449932145D0,  &
+            0.164823306218807D0 , 0.238642339497217D0 , 0.345452975434964D0 , q_cut /)
+
+  real(dp) :: kernel( 0:Nr_points, Nqs, Nqs ), d2phi_dk2( 0:Nr_points, Nqs, Nqs )
 
   real(dp) :: b_value = 6.3_DP
   real(dp) :: C_value = 0.0093 
@@ -31,34 +48,46 @@ MODULE rVV10
   public :: xc_rVV10,  &
             interpolate_kernel, &
             initialize_spline_interpolation, &
-            stress_rVV10, b_value
+            rVV10_stress, b_value, &
+            q_mesh, Nr_points, r_max, q_min, q_cut, Nqs
 
 CONTAINS
 
-!! #################################################################################################
-!!                                       |             |
-!!                                       |  xc_rVV10   |
-!!                                       |_____________|
+! #################################################################################################
+!                                       |             |
+!                                       |  xc_rVV10   |
+!                                       |_____________|
 
   SUBROUTINE xc_rVV10(rho_valence, rho_core, nspin, etxc, vtxc, v, b_value_)
-    
-    !! Modules to include
-    !! -------------------------------------------------------------------------
+  
+    !! Calculate exchange-correlation energy and potential for rVV10.
+
+    ! Modules to include
+    ! -------------------------------------------------------------------------
     
     use gvect,           ONLY : ngm, g
     USE fft_base,        ONLY : dfftp
     USE cell_base,       ONLY : omega, tpiba
-    !! -------------------------------------------------------------------------
+    ! -------------------------------------------------------------------------
     
-    !! Local variables
-    !! ----------------------------------------------------------------------------------
-    !                                               _
-    real(dp), intent(IN) :: rho_valence(:)         !     
-    real(dp), intent(IN) :: rho_core(:)            !  PWSCF input variables 
-    INTEGER,  INTENT(IN) :: nspin                  !
-    real(dp), intent(inout) :: etxc, vtxc, v(:,:)  !_  
+    real(dp), intent(IN) :: rho_valence(:)
+    !! valence charge density
+    real(dp), intent(IN) :: rho_core(:)
+    !! core charge density
+    INTEGER,  INTENT(IN) :: nspin
+    !! number of spin components
+    real(dp), intent(inout) :: etxc
+    !! total XC energy
+    real(dp), intent(inout) :: vtxc
+    !! total XC potential
+    real(dp), intent(inout) :: v(:,:)
+    !! XC potential on rho grid
     real(DP),optional,intent(in) :: b_value_
-   
+    
+    !
+    ! Local variables
+    ! ----------------------------------------------------------------------------------
+    !   
     
     integer :: i_grid, theta_i, i_proc, I      
     real(dp) :: grid_cell_volume                
@@ -79,27 +108,29 @@ CONTAINS
     real(dp) ::  beta
  
  
-    !! ---------------------------------------------------------------------------------------------
-    !!   Begin calculations
+    ! ---------------------------------------------------------------------------------------------
+    !   Begin calculations
   
     !call errore('xc_rVV10','rVV10 functional not implemented for spin polarized runs', size(rho_valence,2)-1)
     if (nspin>2) call errore('xc_vdW_DF','vdW functional not implemented for nspin > 2', nspin)
 
     if(present(b_value_)) b_value = b_value_
     
-    !! --------------------------------------------------------------------------------------------------------
+    ! --------------------------------------------------------------------------------------------------------
 
     call start_clock( 'rVV10' )
 
     beta = 0.0625d0 * (3.0d0 / (b_value**2.0D0) )**(0.75d0)
 
 
-    !! Write parameters during the first iteratio
-    !!
+    ! Write parameters during the first iteratio
+    !
     if (first_iteration) then
 
        first_iteration = .false.
       
+       CALL generate_kernel
+
        if (ionode .and. iverbosity > -1 ) then
 
           WRITE(stdout,'(/ /A )') "---------------------------------------------------------------------------------"
@@ -117,9 +148,9 @@ CONTAINS
        
     end if
 
-    !! --------------------------------------------------------------------------------------------------
-    !! Allocate arrays.   
-    !! ---------------------------------------------------------------------------------------
+    ! --------------------------------------------------------------------------------------------------
+    ! Allocate arrays.   
+    ! ---------------------------------------------------------------------------------------
 
     allocate( q0(dfftp%nnr) )
     allocate( gradient_rho(3,dfftp%nnr) )
@@ -127,22 +158,22 @@ CONTAINS
     allocate( total_rho(dfftp%nnr) )
    
  
-    !! ---------------------------------------------------------------------------------------
-    !! Add together the valence and core charge densities to get the total charge density    
+    ! ---------------------------------------------------------------------------------------
+    ! Add together the valence and core charge densities to get the total charge density    
     !
     total_rho = rho_valence(:) + rho_core(:)
 
-    !! -------------------------------------------------------------------------
-    !! Here we calculate the gradient in reciprocal space using FFT
-    !! -------------------------------------------------------------------------
+    ! -------------------------------------------------------------------------
+    ! Here we calculate the gradient in reciprocal space using FFT
+    ! -------------------------------------------------------------------------
     call fft_gradient_r2r( dfftp, total_rho, g, gradient_rho)
 
-    !! -------------------------------------------------------------------------
-    !! Get Q and all the derivatives
-    !! -------------------------------------------------------------------------
+    ! -------------------------------------------------------------------------
+    ! Get Q and all the derivatives
+    ! -------------------------------------------------------------------------
     CALL get_q0_on_grid(total_rho, gradient_rho, q0, dq0_drho, dq0_dgradrho)
 
-    !! ---------------------------------------------------------------------------------    
+    ! ---------------------------------------------------------------------------------    
 
     allocate( thetas(dfftp%nnr, Nqs) )
     CALL get_thetas_on_grid(total_rho, q0, thetas)
@@ -156,9 +187,9 @@ CONTAINS
 
     call stop_clock( 'rVV10_energy')
 
-    !! Print stuff if verbose run
-    !!
-    if (iverbosity > 1) then
+    ! Print stuff if verbose run
+    !
+    if (iverbosity > 0) then
 
        call mp_sum(Ec_nl,intra_bgrp_comm)
        if (ionode) write(*,'(/ / A /)') "     ----------------------------------------------------------------"
@@ -167,9 +198,9 @@ CONTAINS
        
     end if
 
-    !! ----------------------------------------------------------------------------------------
-    !! Inverse Fourier transform the u_i(k) to get the u_i(r) 
-    !!---------------------------------------------------------------------------------------
+    ! ----------------------------------------------------------------------------------------
+    ! Inverse Fourier transform the u_i(k) to get the u_i(r) 
+    !---------------------------------------------------------------------------------------
 
     call start_clock( 'rVV10_ffts')
     
@@ -179,16 +210,16 @@ CONTAINS
 
     call stop_clock( 'rVV10_ffts')
 
-    !! -------------------------------------------------------------------------
+    ! -------------------------------------------------------------------------
 
     call start_clock( 'rVV10_v' )
 
     allocate( potential(dfftp%nnr) )
     call get_potential(q0, dq0_drho, dq0_dgradrho, total_rho, gradient_rho, thetas, potential)
     
-    !! -------------------------------------------------------------------------
-    !! Add beta
-    !! ------------------------------------------------------------------------- 
+    ! -------------------------------------------------------------------------
+    ! Add beta
+    ! ------------------------------------------------------------------------- 
     potential = potential + beta
     
     v(:,1) = v(:,1) + potential(:)
@@ -196,9 +227,9 @@ CONTAINS
 
     call stop_clock( 'rVV10_v' )
 
-    !! -----------------------------------------------------------------------
-    !! The integral of rho(r)*potential(r) for the vtxc output variable
-    !! --------------------------------------------------------------------
+    ! -----------------------------------------------------------------------
+    ! The integral of rho(r)*potential(r) for the vtxc output variable
+    ! --------------------------------------------------------------------
 
     grid_cell_volume = omega/(dfftp%nr1*dfftp%nr2*dfftp%nr3)  
  
@@ -208,9 +239,9 @@ CONTAINS
 
     deallocate(potential)  
 
-    !! ----------------------------------------------------------------------
+    ! ----------------------------------------------------------------------
     
-    !! Deallocate all arrays.
+    ! Deallocate all arrays.
     deallocate(q0, gradient_rho, dq0_drho, dq0_dgradrho, total_rho, thetas)  
 
     call stop_clock('rVV10')
@@ -218,12 +249,14 @@ CONTAINS
   END SUBROUTINE xc_rVV10 
 
 
-  !! #################################################################################################
-  !!                   |                 |
-  !!                   |  STRESS_rVV10   |
-  !!                   |_________________|
+  ! #################################################################################################
+  !                   |                 |
+  !                   |  rVV10_STRESS   |
+  !                   |_________________|
 
-  SUBROUTINE stress_rVV10(rho_valence, rho_core, nspin, sigma)
+  SUBROUTINE rVV10_stress (rho_valence, rho_core, nspin, sigma)
+
+      !! Calculate the stress tensor for rVV10.
 
       USE fft_base,        ONLY : dfftp
       use gvect,           ONLY : ngm, g
@@ -231,10 +264,14 @@ CONTAINS
 
       implicit none
 
-      real(dp), intent(IN) :: rho_valence(:)             !
-      real(dp), intent(IN) :: rho_core(:)                ! Input variables 
+      real(dp), intent(IN) :: rho_valence(:)
+      !! valence charge density
+      real(dp), intent(IN) :: rho_core(:)
+      !! core charge density
       INTEGER,  INTENT(IN) :: nspin
-      real(dp), intent(inout) :: sigma(3,3)              !  
+      !! number of spin components
+      real(dp), intent(inout) :: sigma(3,3)
+      !! stress tensor
 
       real(dp), allocatable :: gradient_rho(:,:)         !
       real(dp), allocatable :: total_rho(:)              ! Rho values
@@ -249,20 +286,19 @@ CONTAINS
       real(dp)  :: sigma_grad(3,3)
       real(dp)  :: sigma_ker(3,3)
 
-      !! ---------------------------------------------------------------------------------------------
-      !!   Tests
-      !! --------------------------------------------------------------------------------------------------------
+      ! ---------------------------------------------------------------------------------------------
+      !   Tests
+      ! --------------------------------------------------------------------------------------------------------
 
-      !call errore('stress_rVV10','vdW functional not implemented for spin polarized runs', size(rho_valence,2)-1)
-      if (nspin>2) call errore('xc_vdW_DF','vdW functional not implemented for nspin > 2', nspin)
+      if (nspin>2) call errore('rV10_stress',' rVV10 stress not implemented for nspin > 2', nspin)
 
       sigma(:,:) = 0.0_DP
       sigma_grad(:,:) = 0.0_DP
       sigma_ker(:,:) = 0.0_DP
 
-      !! ---------------------------------------------------------------------------------------
-      !! Allocations
-      !! ---------------------------------------------------------------------------------------
+      ! ---------------------------------------------------------------------------------------
+      ! Allocations
+      ! ---------------------------------------------------------------------------------------
 
       allocate( gradient_rho(3,dfftp%nnr) )
       allocate( total_rho(dfftp%nnr) )
@@ -270,35 +306,35 @@ CONTAINS
       allocate( dq0_drho(dfftp%nnr), dq0_dgradrho(dfftp%nnr) )
       allocate( thetas(dfftp%nnr, Nqs) )
  
-      !! ---------------------------------------------------------------------------------------
-      !! Charge
-      !! ---------------------------------------------------------------------------------------
+      ! ---------------------------------------------------------------------------------------
+      ! Charge
+      ! ---------------------------------------------------------------------------------------
       total_rho = rho_valence(:) + rho_core(:)
 
-      !! -------------------------------------------------------------------------
-      !! Here we calculate the gradient in reciprocal space using FFT
-      !! -------------------------------------------------------------------------
+      ! -------------------------------------------------------------------------
+      ! Here we calculate the gradient in reciprocal space using FFT
+      ! -------------------------------------------------------------------------
       call fft_gradient_r2r( dfftp, total_rho, g, gradient_rho)
       
-      !! -------------------------------------------------------------------------------------------------------------
-      !! Get q0.
-      !! ---------------------------------------------------------------------------------
+      ! -------------------------------------------------------------------------------------------------------------
+      ! Get q0.
+      ! ---------------------------------------------------------------------------------
 
       CALL get_q0_on_grid(total_rho, gradient_rho, q0, dq0_drho, dq0_dgradrho)
 
-      !! ---------------------------------------------------------------------------------
-      !! Get thetas in reciprocal space.
-      !! ---------------------------------------------------------------------------------
+      ! ---------------------------------------------------------------------------------
+      ! Get thetas in reciprocal space.
+      ! ---------------------------------------------------------------------------------
 
       CALL get_thetas_on_grid(total_rho, q0, thetas)
 
-      !! ---------------------------------------------------------------------------------------
-      !! Stress
-      !! ---------------------------------------------------------------------------------------
-      CALL stress_rVV10_gradient(total_rho, gradient_rho, q0, dq0_drho, &
+      ! ---------------------------------------------------------------------------------------
+      ! Stress
+      ! ---------------------------------------------------------------------------------------
+      CALL rVV10_stress_gradient(total_rho, gradient_rho, q0, dq0_drho, &
                                   dq0_dgradrho, thetas, sigma_grad)
 
-      CALL stress_rVV10_kernel(total_rho, q0, thetas, sigma_ker)
+      CALL rVV10_stress_kernel(total_rho, q0, thetas, sigma_ker)
 
       sigma = - (sigma_grad + sigma_ker) 
 
@@ -310,24 +346,26 @@ CONTAINS
 
       deallocate( gradient_rho, total_rho, q0, dq0_drho, dq0_dgradrho, thetas )
  
-   END SUBROUTINE stress_rVV10
+   END SUBROUTINE rVV10_stress
 
-   !! ###############################################################################################################
-   !!                             |                          |
-   !!                             |  stress_rVV10_gradient   |
+   ! ###############################################################################################################
+   !                             |                          |
+   !                             |  rVV10_stress_gradient   |
 
-   SUBROUTINE stress_rVV10_gradient (total_rho, gradient_rho, q0, dq0_drho, &
+   SUBROUTINE rVV10_stress_gradient (total_rho, gradient_rho, q0, dq0_drho, &
                                       dq0_dgradrho, thetas, sigma)
 
-      !!-----------------------------------------------------------------------------------
-      !! Modules to include
-      !! ----------------------------------------------------------------------------------
+      !! Calculate rVV10 stress with gradient correction.
+                                      
+      !-----------------------------------------------------------------------------------
+      ! Modules to include
+      ! ----------------------------------------------------------------------------------
       use gvect,                 ONLY : ngm, g, gg, igtongl, &
                                         gl, ngl, gstart
       USE fft_base,              ONLY : dfftp
       USE cell_base,             ONLY : omega, tpiba, alat, at, tpiba2
 
-      !! ----------------------------------------------------------------------------------
+      ! ----------------------------------------------------------------------------------
 
       implicit none
 
@@ -365,15 +403,15 @@ CONTAINS
       sigma(:,:) = 0.0_DP
       prefactor = 0.0_DP
       
-      !! --------------------------------------------------------------------------------------------------
-      !! Get u in k-space.
-      !! ---------------------------------------------------------------------------------------------------
+      ! --------------------------------------------------------------------------------------------------
+      ! Get u in k-space.
+      ! ---------------------------------------------------------------------------------------------------
 
       call thetas_to_uk(thetas, u_vdW)
 
-      !! --------------------------------------------------------------------------------------------------
-      !! Get u in real space.
-      !! ---------------------------------------------------------------------------------------------------
+      ! --------------------------------------------------------------------------------------------------
+      ! Get u in real space.
+      ! ---------------------------------------------------------------------------------------------------
 
       call start_clock( 'rVV10_ffts')
 
@@ -383,19 +421,19 @@ CONTAINS
 
       call stop_clock( 'rVV10_ffts')
 
-      !! --------------------------------------------------------------------------------------------------
-      !! Get the second derivatives for interpolating the P_i
-      !! ---------------------------------------------------------------------------------------------------
+      ! --------------------------------------------------------------------------------------------------
+      ! Get the second derivatives for interpolating the P_i
+      ! ---------------------------------------------------------------------------------------------------
 
       call initialize_spline_interpolation(q_mesh, d2y_dx2(:,:))
 
-      !! ---------------------------------------------------------------------------------------------
+      ! ---------------------------------------------------------------------------------------------
 
       i_grid = 0
 
-      !! ----------------------------------------------------------------------------------------------------
-      !! Do the real space integration to obtain the stress component
-      !! ----------------------------------------------------------------------------------------------------
+      ! ----------------------------------------------------------------------------------------------------
+      ! Do the real space integration to obtain the stress component
+      ! ----------------------------------------------------------------------------------------------------
 
       do i_grid = 1, dfftp%nnr
 
@@ -452,7 +490,7 @@ CONTAINS
                         enddo
                      endif
 
-                     !! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
                  end do
            
@@ -464,19 +502,19 @@ CONTAINS
 
       deallocate( d2y_dx2, u_vdW )
 
-   END SUBROUTINE stress_rVV10_gradient
+   END SUBROUTINE rVV10_stress_gradient
 
 
 
-   !! ###############################################################################################################
-   !!                      |                        |
-   !!                      |  stress_rVV10_kernel   |
-   !!                      |                        |
+   ! ###############################################################################################################
+   !                      |                        |
+   !                      |  rVV10_stress_kernel   |
+   !                      |                        |
 
-   SUBROUTINE stress_rVV10_kernel (total_rho, q0, thetas, sigma)
+   SUBROUTINE rVV10_stress_kernel (total_rho, q0, thetas, sigma)
 
-      !! Modules to include
-      !! ----------------------------------------------------------------------------------
+      ! Modules to include
+      ! ----------------------------------------------------------------------------------
       use gvect,                 ONLY : ngm, g, gg, igtongl, gl, ngl, gstart 
       USE fft_base,              ONLY : dfftp
       USE cell_base,             ONLY : omega, tpiba, tpiba2
@@ -499,9 +537,9 @@ CONTAINS
 
       sigma(:,:) = 0.0_DP
 
-      !! --------------------------------------------------------------------------------------------------
-      !! Integration in g-space
-      !! ---------------------------------------------------------------------------------------------------
+      ! --------------------------------------------------------------------------------------------------
+      ! Integration in g-space
+      ! ---------------------------------------------------------------------------------------------------
 
       last_g = -1
 
@@ -541,18 +579,17 @@ CONTAINS
       
       deallocate( dkernel_of_dk )
       
-   END SUBROUTINE stress_rVV10_kernel
+   END SUBROUTINE rVV10_stress_kernel
 
 
-  !! ###############################################################################################################
-  !!                                    |                  |
-  !!                                    |  GET_Q0_ON_GRID  |
-  !!                                    |__________________|
+  ! ###############################################################################################################
+  !                                    |                  |
+  !                                    |  GET_Q0_ON_GRID  |
+  !                                    |__________________|
 
   SUBROUTINE get_q0_on_grid (total_rho, gradient_rho, q0, dq0_drho, dq0_dgradrho)
     
     USE fft_base,        ONLY : dfftp
-    USE kernel_table,    ONLY : q_cut, q_min
     
     real(dp),  intent(IN)    :: total_rho(:), gradient_rho(:,:)   
     real(dp),  intent(OUT) :: q0(:), dq0_drho(:), dq0_dgradrho(:)
@@ -577,8 +614,8 @@ CONTAINS
               gradient_rho(2,i_grid)**2 + &
               gradient_rho(3,i_grid)**2
  
-       !! Calculate some intermediate values needed to find q
-       !! ------------------------------------------------------------------------------------
+       ! Calculate some intermediate values needed to find q
+       ! ------------------------------------------------------------------------------------
        mod_grad = sqrt(gmod2)
 
        wp2= 16.0_dp*pi*total_rho(i_grid)
@@ -589,8 +626,8 @@ CONTAINS
 
        q = w0 / k 
      
-       !! Here, we calculate q0 by saturating q according 
-       !! ---------------------------------------------------------------------------------------
+       ! Here, we calculate q0 by saturating q according 
+       ! ---------------------------------------------------------------------------------------
 
        exponent = 0.0_dp
        dq0_dq = 0.0_dp
@@ -605,13 +642,13 @@ CONTAINS
        q0(i_grid) = q_cut*(1.0_dp - exp(-exponent))
        dq0_dq = dq0_dq * exp(-exponent)
 
-       !! ---------------------------------------------------------------------------------------
+       ! ---------------------------------------------------------------------------------------
 
        if (q0(i_grid) < q_min) then
          q0(i_grid) = q_min
        end if
 
-       !!---------------------------------Final values---------------------------------  
+       !---------------------------------Final values---------------------------------  
 
        dw0_dn = 1.0_dp/(2.0_dp*w0) * (16.0_dp/3.0_dp*pi - 4.0_dp*wg2 / total_rho(i_grid) )                
        dk_dn = k / ( 6.0_dp * total_rho(i_grid) )
@@ -630,9 +667,9 @@ CONTAINS
   end SUBROUTINE get_q0_on_grid
 
 
-!! ###############################################################################################################
-!!                                      |                      |
-!!                                      |  GET_THETAS_ON_GRID  |
+! ###############################################################################################################
+!                                      |                      |
+!                                      |  GET_THETAS_ON_GRID  |
 
 
   SUBROUTINE get_thetas_on_grid (total_rho, q0_on_grid, thetas)
@@ -646,11 +683,11 @@ CONTAINS
   
     Ngrid_points = size(q0_on_grid)
   
-    !! Interpolate the P_i polynomials 
+    ! Interpolate the P_i polynomials 
     CALL spline_interpolation(q_mesh, q0_on_grid, thetas)
   
-    !! Form the thetas where theta is defined as rho*p_i(q0)
-    !! ------------------------------------------------------------------------------------
+    ! Form the thetas where theta is defined as rho*p_i(q0)
+    ! ------------------------------------------------------------------------------------
 
     do i_grid = 1, Ngrid_points
   
@@ -663,7 +700,7 @@ CONTAINS
      
     end do
 
-    !! ------------------------------------------------------------------------------------
+    ! ------------------------------------------------------------------------------------
   
     call start_clock( 'rVV10_ffts')
 
@@ -677,44 +714,45 @@ CONTAINS
   END SUBROUTINE get_thetas_on_grid
 
 
-!! ###############################################################################################################
-!!                                     |                        | 
-!!                                     |  SPLINE_INTERPOLATION  |
-!!                                     |________________________|
+! ###############################################################################################################
+!                                     |                        | 
+!                                     |  SPLINE_INTERPOLATION  |
+!                                     |________________________|
 
 
 SUBROUTINE spline_interpolation (x, evaluation_points, values)
   
+  real(dp), intent(in) :: x(:)
+  !! The x values used to form the interpolation
+  real(dp), intent(in) :: evaluation_points(:)
+  !! (q_mesh in this case) and the values of q0 for which we are 
+  !! interpolating the function.
+  complex(dp), intent(inout) :: values(:,:)
+  !! An output array (allocated outside this routine) that stores the
+  !! interpolated values of the P_i (SOLER equation 3) polynomials. The
+  !! format is values(grid_point, P_i).
+  !
+  integer :: Ngrid_points, Nx                                 ! Total number of grid points to evaluate and input x points
   
-  real(dp), intent(in) :: x(:), evaluation_points(:)          !! Input variables.  The x values used to form the interpolation
-  !                                                           !! (q_mesh in this case) and the values of q0 for which we are 
-  !                                                           !! interpolating the function
+  real(dp), allocatable, save :: d2y_dx2(:,:)                 ! The second derivatives required to do the interpolation
   
-  complex(dp), intent(inout) :: values(:,:)                   !! An output array (allocated outside this routine) that stores the
-  !                                                           !! interpolated values of the P_i (SOLER equation 3) polynomials.  The
-  !                                                           !! format is values(grid_point, P_i)
+  integer :: i_grid, lower_bound, upper_bound, index, P_i     ! Some indexing variables
   
-  integer :: Ngrid_points, Nx                                 !! Total number of grid points to evaluate and input x points
-  
-  real(dp), allocatable, save :: d2y_dx2(:,:)                 !! The second derivatives required to do the interpolation
-  
-  integer :: i_grid, lower_bound, upper_bound, index, P_i     !! Some indexing variables
-  
-  real(dp), allocatable :: y(:)                               !! Temporary variables needed for the interpolation
-  real(dp) :: a, b, c, d, dx                                  !!
+  real(dp), allocatable :: y(:)                               ! Temporary variables needed for the interpolation
+  real(dp) :: a, b, c, d, dx                                  !
  
  
   Nx = size(x)
   Ngrid_points = size(evaluation_points)
   
 
-  !! Allocate the temporary array
+  ! Allocate the temporary array
   allocate( y(Nx) )
 
-  !! If this is the first time this routine has been called we need to get the second
-  !! derivatives (d2y_dx2) required to perform the interpolations.  So we allocate the
-  !! array and call initialize_spline_interpolation to get d2y_dx2.
-  !! ------------------------------------------------------------------------------------
+  ! If this is the first time this routine has been called we need to get the second
+  ! derivatives (d2y_dx2) required to perform the interpolations.  So we allocate the
+  ! array and call initialize_spline_interpolation to get d2y_dx2.
+  ! ------------------------------------------------------------------------------------
   if (.not. allocated(d2y_dx2) ) then
 
      allocate( d2y_dx2(Nx,Nx) )
@@ -722,7 +760,7 @@ SUBROUTINE spline_interpolation (x, evaluation_points, values)
      
   end if
 
-  !! ------------------------------------------------------------------------------------
+  ! ------------------------------------------------------------------------------------
   
   
   do i_grid=1, Ngrid_points
@@ -767,29 +805,30 @@ SUBROUTINE spline_interpolation (x, evaluation_points, values)
 END SUBROUTINE spline_interpolation
 
   
-!! ###############################################################################################################
-!!                                |                                   |
-!!                                |  INITIALIZE_SPLINE_INTERPOLATION  |
-!!                                |___________________________________|
+! ###############################################################################################################
+!                                |                                   |
+!                                |  INITIALIZE_SPLINE_INTERPOLATION  |
+!                                |___________________________________|
 
-
-!! This routine is modeled after an algorithm from "Numerical Recipes in C" by Cambridge
-!! University Press, pages 96-97.  It was adapted for Fortran and for the problem at hand.
 
 SUBROUTINE initialize_spline_interpolation (x, d2y_dx2)
-  
-  real(dp), intent(in)  :: x(:)                    !! The input abscissa values 
-  real(dp), intent(inout) :: d2y_dx2(:,:)          !! The output array (allocated outside this routine)
-  !                                                !! that holds the second derivatives required for 
-  !                                                !! interpolating the function
 
-  integer :: Nx, P_i, index                        !! The total number of x points and some indexing
-  !                                                !! variables
+  !! This routine is modeled after an algorithm from "Numerical Recipes in C" by Cambridge
+  !! University Press, pages 96-97.  It was adapted for Fortran and for the problem at hand.
 
-  real(dp), allocatable :: temp_array(:), y(:)     !! Some temporary arrays required.  y is the array
-  !                                                !! that holds the funcion values (all either 0 or 1 here).
+  real(dp), intent(in)  :: x(:)
+  !! The input abscissa values 
+  real(dp), intent(inout) :: d2y_dx2(:,:)
+  !! The output array (allocated outside this routine) that holds the second derivatives
+  !! required for interpolating the function.
 
-  real(dp) :: temp1, temp2                         !! Some temporary variables required
+  integer :: Nx, P_i, index                        ! The total number of x points and some indexing
+  !                                                ! variables
+
+  real(dp), allocatable :: temp_array(:), y(:)     ! Some temporary arrays required.  y is the array
+  !                                                ! that holds the funcion values (all either 0 or 1 here).
+
+  real(dp) :: temp1, temp2                         ! Some temporary variables required
 
 
   
@@ -800,15 +839,15 @@ SUBROUTINE initialize_spline_interpolation (x, d2y_dx2)
   do P_i=1, Nx
      
 
-     !! In the Soler method, the polynomicals that are interpolated are Kroneker delta funcions
-     !! at a particular q point.  So, we set all y values to 0 except the one corresponding to 
-     !! the particular function P_i.
-     !! ----------------------------------------------------------------------------------------
+     ! In the Soler method, the polynomicals that are interpolated are Kroneker delta funcions
+     ! at a particular q point.  So, we set all y values to 0 except the one corresponding to 
+     ! the particular function P_i.
+     ! ----------------------------------------------------------------------------------------
 
      y = 0.0D0
      y(P_i) = 1.0D0
 
-     !! ----------------------------------------------------------------------------------------
+     ! ----------------------------------------------------------------------------------------
      
      d2y_dx2(P_i,1) = 0.0D0
      temp_array(1) = 0.0D0
@@ -840,39 +879,35 @@ SUBROUTINE initialize_spline_interpolation (x, d2y_dx2)
 end SUBROUTINE initialize_spline_interpolation
 
 
-!! ###############################################################################################################
-!!                                         |                    |
-!!                                         | INTERPOLATE_KERNEL |
-!!                                         |____________________|
-
-
-!! This routine is modeled after an algorithm from "Numerical Recipes in C" by Cambridge
-!! University Press, page 97.  Adapted for Fortran and the problem at hand.  This function is used to 
-!! find the Phi_alpha_beta needed for equations 11 and 14 of SOLER.
+! ###############################################################################################################
+!                                         |                    |
+!                                         | INTERPOLATE_KERNEL |
+!                                         |____________________|
 
 
 subroutine interpolate_kernel(k, kernel_of_k)
-  
-  USE kernel_table,             ONLY : r_max, Nr_points, kernel, d2phi_dk2, dk
 
-  real(dp), intent(in) :: k                     !! Input value, the magnitude of the g-vector for the 
-  !                                             !! current point.
-  
-  real(dp), intent(inout) :: kernel_of_k(:,:)   !! An output array (allocated outside this routine)
-  !                                             !! that holds the interpolated value of the kernel
-  !                                             !! for each pair of q points (i.e. the phi_alpha_beta 
-  !                                             !! of the Soler method.
+  !! This routine is modeled after an algorithm from "Numerical Recipes in C" by Cambridge
+  !! University Press, page 97.  Adapted for Fortran and the problem at hand.  This function is used to 
+  !! find the Phi_alpha_beta needed for equations 11 and 14 of SOLER.
 
-  integer :: q1_i, q2_i, k_i                    !! Indexing variables
+  real(dp), intent(in) :: k
+  !! Input value, the magnitude of the g-vector for the current point.
+  
+  real(dp), intent(inout) :: kernel_of_k(:,:)
+  !! An output array (allocated outside this routine) that holds the interpolated value of
+  !! the kernel for each pair of q points (i.e. the phi_alpha_beta of the Soler method.
+
+  integer :: q1_i, q2_i, k_i                    ! Indexing variables
  
-  real(dp) :: A, B, C, D                        !! Intermediate values for the interpolation
+  real(dp) :: A, B, C, D                        ! Intermediate values for the interpolation
   
 
-  !! Check to make sure that the kernel table we have is capable of dealing with this
-  !! value of k.  If k is larger than Nr_points*2*pi/r_max then we can't perform the 
-  !! interpolation.  In that case, a kernel file should be generated with a larger number
-  !! of radial points.
-  !! -------------------------------------------------------------------------------------
+  ! Check to make sure that the kernel table we have is capable of dealing with this
+  ! value of k.  If k is larger than Nr_points*2*pi/r_max then we can't perform the 
+  ! interpolation.  In that case, a kernel file should be generated with a larger number
+  ! of radial points.
+  ! -------------------------------------------------------------------------------------
 
   if ( k >= Nr_points*dk ) then
      
@@ -881,18 +916,18 @@ subroutine interpolate_kernel(k, kernel_of_k)
      
   end if
 
-  !! -------------------------------------------------------------------------------------
+  ! -------------------------------------------------------------------------------------
   
   kernel_of_k = 0.0D0
   
-  !! This integer division figures out which bin k is in since the kernel
-  !! is set on a uniform grid.
+  ! This integer division figures out which bin k is in since the kernel
+  ! is set on a uniform grid.
   k_i = int(k/dk)
   
-  !! Test to see if we are trying to interpolate a k that is one of the actual
-  !! function points we have.  The value is just the value of the function in that
-  !! case.
-  !! ----------------------------------------------------------------------------------------
+  ! Test to see if we are trying to interpolate a k that is one of the actual
+  ! function points we have.  The value is just the value of the function in that
+  ! case.
+  ! ----------------------------------------------------------------------------------------
 
   if (mod(k,dk) == 0) then
      
@@ -909,11 +944,11 @@ subroutine interpolate_kernel(k, kernel_of_k)
      
   end if
 
-  !! ----------------------------------------------------------------------------------------
+  ! ----------------------------------------------------------------------------------------
 
 
-  !! If we are not on a function point then we carry out the interpolation
-  !! ----------------------------------------------------------------------------------------
+  ! If we are not on a function point then we carry out the interpolation
+  ! ----------------------------------------------------------------------------------------
   
   A = (dk*(k_i+1.0D0) - k)/dk
   B = (k - dk*k_i)/dk
@@ -931,23 +966,21 @@ subroutine interpolate_kernel(k, kernel_of_k)
      end do
   end do
 
-  !! ----------------------------------------------------------------------------------------
+  ! ----------------------------------------------------------------------------------------
 
   
 end subroutine interpolate_kernel
 
 
-!! ###############################################################################################################
-!!                                         |                        |
-!!                                         | INTERPOLATE_DKERNEL_DK |
-!!                                         |________________________|
+! ###############################################################################################################
+!                                         |                        |
+!                                         | INTERPOLATE_DKERNEL_DK |
+!                                         |________________________|
 
 
 
 subroutine interpolate_Dkernel_Dk(k, dkernel_of_dk)
   
-  USE kernel_table,             ONLY : r_max, Nr_points, kernel, d2phi_dk2, dk
-
   implicit none 
 
   real(dp), intent(in) :: k        
@@ -957,7 +990,7 @@ subroutine interpolate_Dkernel_Dk(k, dkernel_of_dk)
   real(dp) :: A, B, dAdk, dBdk, dCdk, dDdk    
   
 
-  !! -------------------------------------------------------------------------------------
+  ! -------------------------------------------------------------------------------------
 
   if ( k >= Nr_points*dk ) then
      
@@ -966,13 +999,13 @@ subroutine interpolate_Dkernel_Dk(k, dkernel_of_dk)
      
   end if
 
-  !! -------------------------------------------------------------------------------------
+  ! -------------------------------------------------------------------------------------
 
   dkernel_of_dk = 0.0D0
 
   k_i = int(k/dk)
 
-  !! ----------------------------------------------------------------------------------------
+  ! ----------------------------------------------------------------------------------------
 
   A = (dk*(k_i+1.0D0) - k)/dk
   B = (k - dk*k_i)/dk
@@ -993,15 +1026,15 @@ subroutine interpolate_Dkernel_Dk(k, dkernel_of_dk)
      end do
   end do
 
-  !! ----------------------------------------------------------------------------------------
+  ! ----------------------------------------------------------------------------------------
 
   
 end subroutine interpolate_Dkernel_Dk 
 
-!! #################################################################################################
-!!                                          |              |
-!!                                          | thetas_to_uk |
-!!                                          |______________|
+! #################################################################################################
+!                                          |              |
+!                                          | thetas_to_uk |
+!                                          |______________|
 
 
 subroutine thetas_to_uk(thetas, u_vdW)
@@ -1020,7 +1053,7 @@ subroutine thetas_to_uk(thetas, u_vdW)
 
   complex(dp) :: theta(Nqs)        
   
-  !! -------------------------------------------------------------------------------------------------
+  ! -------------------------------------------------------------------------------------------------
   
   allocate( kernel_of_k(Nqs, Nqs) )
 
@@ -1052,14 +1085,14 @@ subroutine thetas_to_uk(thetas, u_vdW)
   
   deallocate( kernel_of_k )
      
-  !! -----------------------------------------------------------------------------------------------
+  ! -----------------------------------------------------------------------------------------------
   
 end subroutine thetas_to_uk
 
-!! #################################################################################################
-!!                                              |             |
-!!                                              | VDW_ENERGY  |
-!!                                              |_____________|
+! #################################################################################################
+!                                              |             |
+!                                              | VDW_ENERGY  |
+!                                              |_____________|
 
 subroutine vdW_energy(thetas, vdW_xc_energy)
   
@@ -1089,9 +1122,9 @@ subroutine vdW_energy(thetas, vdW_xc_energy)
 
   allocate( kernel_of_k(Nqs, Nqs) )
   
-  !!
-  !! Here we should use gstart,ngm but all the cases are handeld by conditionals inside the loop
-  !!
+  !
+  ! Here we should use gstart,ngm but all the cases are handeld by conditionals inside the loop
+  !
   G_multiplier = 1.0D0
   if (gamma_only) G_multiplier = 2.0D0
 
@@ -1122,21 +1155,21 @@ subroutine vdW_energy(thetas, vdW_xc_energy)
 
   if (gamma_only) u_vdW(dfftp%nlm(:),:) = CONJG(u_vdW(dfftp%nl(:),:))
 
-  !! Final value 
+  ! Final value 
   vdW_xc_energy = 0.5D0 * omega * vdW_xc_energy   
   
   deallocate( kernel_of_k )
   thetas(:,:) = u_vdW(:,:)
   deallocate (u_vdW)
-  !! ---------------------------------------------------------------------------------------------------
+  ! ---------------------------------------------------------------------------------------------------
   
 end subroutine vdW_energy
 
 
-!! ###############################################################################################################
-!!                                             |                 |
-!!                                             |  GET_POTENTIAL  |
-!!                                             |_________________|
+! ###############################################################################################################
+!                                             |                 |
+!                                             |  GET_POTENTIAL  |
+!                                             |_________________|
 
   subroutine get_potential(q0, dq0_drho, dq0_dgradrho, total_rho, gradient_rho, u_vdW, potential)
 
@@ -1171,9 +1204,9 @@ end subroutine vdW_energy
     potential = 0.0D0
     h_prefactor   = 0.0D0
 
-    !! -------------------------------------------------------------------------------------------
-    !! Get the second derivatives of the P_i functions for interpolation
-    !! ---------------------------------------------------------------------------------------------
+    ! -------------------------------------------------------------------------------------------
+    ! Get the second derivatives of the P_i functions for interpolation
+    ! ---------------------------------------------------------------------------------------------
 
     if (.not. allocated( d2y_dx2) ) then
      
@@ -1182,7 +1215,7 @@ end subroutine vdW_energy
      
     end if
   
-    !! ---------------------------------------------------------------------------------------------
+    ! ---------------------------------------------------------------------------------------------
   
 
     do i_grid = 1,dfftp%nnr
@@ -1226,7 +1259,7 @@ end subroutine vdW_energy
         P = a*y(q_low) + b*y(q_hi) + c*d2y_dx2(P_i,q_low) + d*d2y_dx2(P_i,q_hi)
  
 
-        !! IF THE CHARGE DENSITY IS NEGATIVE WE PUT POTENTIAL = 0, OUTSIDE THE SUBROUTINE WE ADD BETA. 
+        ! IF THE CHARGE DENSITY IS NEGATIVE WE PUT POTENTIAL = 0, OUTSIDE THE SUBROUTINE WE ADD BETA. 
         if (total_rho(i_grid) > epsr) then
 
           dtheta_dn = const * (3.0D0/4.0D0) / (total_rho(i_grid)**(1.0D0/4.0D0))  * P + &
@@ -1253,219 +1286,119 @@ end subroutine vdW_energy
       potential(:) = potential(:) - REAL(h(:))
     end do
 
-    !! ------------------------------------------------------------------------------------------------------------------------
+    ! ------------------------------------------------------------------------------------------------------------------------
     deallocate (h_prefactor,h)
 
   end subroutine get_potential
 
-!! ###############################################################################################################
-!!                                            |                         |
-!!                                            |  GRADIENT_COEFFICIENTS  |
-!!                                            |_________________________|
+
+! ###############################################################################################################
+!                                                 |                   |
+!                                                 |  generate_kernel  |
+!                                                 |___________________|
+SUBROUTINE generate_kernel
+
+  implicit none
+
+  integer  :: q1_i, q2_i, r_i                   ! Indexing variables
+  real(dp) :: d1, d2                            ! Intermediate values
 
 
-!!  This routine returns a pointer to an array holding the coefficients for a derivative expansion to some order.
-!!  The derivative is found by multiplying the value of the function at a point + or - n away from the sample point by
-!!  the coefficient gradient_coefficients(+ or - n) and dividing by the appropriate dx for that direction.
+  kernel    = 0.0D0
+  d2phi_dk2 = 0.0D0
 
+  do q1_i = 1, Nqs
+     do q2_i = 1, q1_i
 
-function gradient_coefficients(N)
-  
-  real(dp), allocatable, target, save:: coefficients(:)  !! The local array that will hold the coefficients.  A pointer to this
-  !                                                      !! array will be returned by the function
-
-  integer, intent(in), optional :: N                     !! The number of neighbors to use on each side for the gradient
-  !                                                      !! calculation.  Can be between 1 (i.e. 3 point derivative formula) 
-  !                                                      !! and 6 (i.e. 13 point derivative formula).
-
-  real(dp), pointer :: gradient_coefficients(:)          !! Pointer to the coefficients array that will be returned
-  
-
-  if (.not. allocated(coefficients) ) then
-
-     if (.not. present(N) ) call errore('gradient_coefficients', 'Number of neighbors for gradient must be specified',2)
-  
-     allocate( coefficients(-N:N) )
-        
-     select case (N)
-        
-     case (1) 
-        coefficients(-1:1) = (/-0.5D0, 0.0D0, 0.5D0/)
-     case (2)
-        coefficients(-2:2) = (/0.0833333333333333D0, -0.6666666666666666D0, 0.0D0, &
-                               0.6666666666666666D0, -0.0833333333333333D0/)
-     case (3) 
-        coefficients(-3:3) = (/-0.0166666666666666D0, 0.15D0, -0.75D0, 0.0D0, 0.75D0, &
-                               -0.15D0, 0.016666666666666666D0/)
-     case (4)
-        coefficients(-4:4) = (/0.00357142857143D0, -0.03809523809524D0, 0.2D0, -0.8D0, 0.0D0, &
-             0.8D0, -0.2D0, 0.03809523809524D0, -0.00357142857143D0/)
-     case (5)
-        coefficients(-5:5) = (/-0.00079365079365D0, 0.00992063492063D0, -0.05952380952381D0, &
-                                0.23809523809524D0, -0.8333333333333333D0, 0.0D0, 0.8333333333333333D0, &
-                               -0.23809523809524D0, 0.05952380952381D0, -0.00992063492063D0, 0.00079365079365D0/)
-     case (6) 
-        coefficients(-6:6) = (/0.00018037518038D0, -0.00259740259740D0, 0.01785714285714D0, &
-                              -0.07936507936508D0, 0.26785714285714D0, -0.85714285714286D0, 0.0D0, &
-                               0.85714285714286D0, -0.26785714285714D0, 0.07936507936508D0, &
-                              -0.01785714285714D0, 0.00259740259740D0, -0.00018037518038D0/)
-     case default
-        
-        call errore('xc_vdW_DF', 'Order of numerical gradient not implemented', 2)
-        
-     end select
-     
-  end if
-     
-  gradient_coefficients => coefficients  
-
-  
-end function gradient_coefficients
-
-
-!! ###############################################################################################################
-
-
-!! ###############################################################################################################
-!!                                                 |                  |
-!!                                                 |  GET_3D_INDICES  |
-!!                                                 |__________________|
-
-!! This routine builds a rank 3 array that holds the indices into the FFT grid for a point with a given
-!! set of x, y, and z indices.  The array holds an extra 2N points in each dimension (N to the left and N
-!! to the right) so the code can find the neighbors of edge points easily.  This is done by just copying the
-!! first N points in each dimension to the end of that dimension and the end N points to the beginning.
-
-
-function get_3d_indices(N)
-  
-  USE fft_base,            ONLY : dfftp
-   
-
-  integer, intent(in), optional :: N                     !! The number of neighbors in each direction that will
-  !                                                      !! be used for the gradient formula.  If not supplied,
-  !                                                      !! the code just returns the pointer to the already
-  !                                                      !! allocated rho_3d array.
-
-  real(dp) :: dx, dy, dz                                 !! 
-  integer :: ix1, ix2, ix3, i_grid                       !! Index variables
-
-  integer, allocatable, target, save :: rho_3d(:,:,:)    !! The local array that will store the indices.  Only a pointer
-  !                                                      !! to this array will be returned.
-
-  integer, pointer :: get_3d_indices(:,:,:)              !! The returned pointer to the rho_3d array of indices.
-  
-
-  
-  !! If the routine has not already been run we set up the rho_3d array by looping over it
-  !! and assigning indices to its elements.  If this routine has already been run we simply
-  !! return a pointer to the existing array.
-  !! --------------------------------------------------------------------------------
-  
-  if (.not. allocated(rho_3d)) then
-     
-     ! Check to make sure we have been given the number of neighbors since the routine has
-     ! not been run yet.
-     ! ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-     
-     if (.not. present(N)) then
-        
-        call errore('get_3d_rho','Number of neighbors for numerical derivatives &
-&             must be specified',2)
-        
-     end if
-
-     ! ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-     
-     allocate( rho_3d(-N+1:dfftp%nr1x+N, -N+1:dfftp%nr2x+N, -N+1:dfftp%nr3x+N) )
-     
-     i_grid = 0
-     
-     do ix3 = 1, dfftp%nr3x
-        do ix2 = 1, dfftp%nr2x
-           do ix1 = 1, dfftp%nr1x
-              
-              i_grid = i_grid + 1
-              
-              rho_3d(ix1, ix2, ix3) = i_grid
-              
-           end do
+        do r_i = 1, Nr_points
+           d1 = q_mesh(q1_i) * (dr * r_i)**2    ! Different definition of d1 and d2 for vv10
+           d2 = q_mesh(q2_i) * (dr * r_i)**2    ! Different definition of d1 and d2 for vv10
+           kernel(r_i, q1_i, q2_i) = -24.0D0 / ( ( d1+1.0 ) * ( d2+1.0 ) * ( d1+d2+2.0 ) )
         end do
+
+        call radial_fft( kernel(:, q1_i, q2_i) )
+        call set_up_splines( kernel(:, q1_i, q2_i), d2phi_dk2(:, q1_i, q2_i) )
+
+        kernel    (:, q2_i, q1_i) = kernel   (:, q1_i, q2_i)
+        d2phi_dk2 (:, q2_i, q1_i) = d2phi_dk2(:, q1_i, q2_i)
+
      end do
-     
-     
-     
-     ! Apply periodic boundary conditions to extend the array by N places in each
-     ! direction
-     ! ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  end do
 
-     rho_3d(-N+1:0,:,:) = rho_3d(dfftp%nr1x-N+1:dfftp%nr1x, :, :)
-     rho_3d(:,-N+1:0,:) = rho_3d(:, dfftp%nr2x-N+1:dfftp%nr2x, :)
-     rho_3d(:,:,-N+1:0) = rho_3d(:, :, dfftp%nr3x-N+1:dfftp%nr3x)
-     
-     rho_3d(dfftp%nr1x+1:dfftp%nr1x+N, :, :) = rho_3d(1:N, :, :)
-     rho_3d(:, dfftp%nr2x+1:dfftp%nr2x+N, :) = rho_3d(:, 1:N, :)
-     rho_3d(:, :, dfftp%nr3x+1:dfftp%nr3x+N) = rho_3d(:, :, 1:N)
-     
-     ! +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+END SUBROUTINE generate_kernel
 
-  end if
 
-  !! ------------------------------------------------------------------------------------------
+! ###############################################################################################################
+!                                                 |              |
+!                                                 |  radial_fft  |
+!                                                 |______________|
+SUBROUTINE radial_fft(phi)
 
-  
-  !! Return the point to rho_3d
-  get_3d_indices => rho_3d
+  REAL(DP), INTENT(INOUT) :: phi(0:Nr_points)
+  REAL(DP)                :: phi_k(0:Nr_points)
+  INTEGER                 :: k_i, r_i
+  REAL(DP)                :: r, k
   
   
-end function  get_3d_indices
-
-
-!! ###############################################################################################################
-!!                                           |                     |
-!!                                           |  INVERT_3X3_MATRIX  |
-!!                                           |_____________________|
-
-!! This routine is just a hard-wired subroutine to invert a 3x3 matrix.  It is used to invert the matrix of
-!! unit cell basis vectors to find the gradient and the derivative of the gradient with respect to the
-!! density.
-
-subroutine invert_3x3_matrix(M) 
+  phi_k = 0.0D0
   
-  real(dp), intent(inout) :: M(3,3)     !! On input, the 3x3 matrix to be inverted
-  !                                     !! On output, the inverse of the 3x3 matrix given
+  DO r_i = 1, Nr_points
+     r        = r_i * dr
+     phi_k(0) = phi_k(0) + phi(r_i)*r**2
+  END DO
   
-  real(dp) :: temp(3,3)                 !! Temporary storage
+  phi_k(0) = phi_k(0) - 0.5D0 * (Nr_points*dr)**2 * phi(Nr_points)
+  
+  DO k_i = 1, Nr_points
+     k = k_i * dk
+     DO r_i = 1, Nr_points
+        r          = r_i * dr
+        phi_k(k_i) = phi_k(k_i) + phi(r_i) * r * SIN(k*r) / k
+     END DO
+     phi_k(k_i) = phi_k(k_i) - 0.5D0 * phi(Nr_points) * r * SIN(k*r) / k
+  END DO
+  
+  phi = 4.0D0 * pi * phi_k * dr
 
-  real(dp) :: determinant_M             !! The determinant of the input 3x3 matrix
+END SUBROUTINE radial_fft
 
 
-  temp = 0.0D0
+! ###############################################################################################################
+!                                              |                  |
+!                                              |  set_up_splines  |
+!                                              |__________________|
+SUBROUTINE set_up_splines(phi, D2)
 
-  temp(1,1) = M(2,2)*M(3,3) - M(2,3)*M(3,2)
-  temp(1,2) = M(1,3)*M(3,2) - M(1,2)*M(3,3)
-  temp(1,3) = M(1,2)*M(2,3) - M(1,3)*M(2,2)
-  temp(2,1) = M(2,3)*M(3,1) - M(2,1)*M(3,3)
-  temp(2,2) = M(1,1)*M(3,3) - M(1,3)*M(3,1)
-  temp(2,3) = M(1,3)*M(2,1) - M(1,1)*M(2,3)
-  temp(3,1) = M(2,1)*M(3,2) - M(2,2)*M(3,1)
-  temp(3,2) = M(1,2)*M(3,1) - M(1,1)*M(3,2)
-  temp(3,3) = M(1,1)*M(2,2) - M(1,2)*M(2,1)
+  REAL(DP), INTENT(IN)    :: phi(0:Nr_points)
+  REAL(DP), INTENT(INOUT) :: D2(0:Nr_points)
+  REAL(DP), ALLOCATABLE   :: temp_array(:)
+  REAL(DP)                :: temp_1, temp_2
+  INTEGER                 :: r_i
+  
+  
+  ALLOCATE( temp_array(0:Nr_points) )
+  
+  D2         = 0
+  temp_array = 0
+  
+  DO r_i = 1, Nr_points - 1
+     temp_1  = DBLE(r_i - (r_i - 1))/DBLE( (r_i + 1) - (r_i - 1) )
+     temp_2  = temp_1 * D2(r_i-1) + 2.0D0
+     D2(r_i) = (temp_1 - 1.0D0)/temp_2
+     temp_array(r_i) = ( phi(r_i+1) - phi(r_i))/DBLE( dk*((r_i+1) - r_i) ) - &
+          ( phi(r_i) - phi(r_i-1))/DBLE( dk*(r_i - (r_i-1)) )
+     temp_array(r_i) = (6.0D0*temp_array(r_i)/DBLE( dk*((r_i+1) - (r_i-1)) )-&
+          temp_1*temp_array(r_i-1))/temp_2
+  END DO
+  
+  D2(Nr_points) = 0.0D0
+  DO  r_i = Nr_points-1, 0, -1
+     D2(r_i) = D2(r_i)*D2(r_i+1) + temp_array(r_i)
+  END DO
+  
+  DEALLOCATE( temp_array )
 
-  determinant_M = M(1,1) * (M(2,2)*M(3,3) - M(2,3)*M(3,2)) &
-       - M(1,2) * (M(2,1)*M(3,3) - M(2,3)*M(3,1)) &
-       + M(1,3) * (M(2,1)*M(3,2) - M(2,2)*M(3,1))
+END SUBROUTINE set_up_splines
 
-  if (abs(determinant_M) > 1e-6) then
-     
-     M = 1.0D0/determinant_M*temp
 
-  else
-
-     call errore('invert_3x3_matrix','Matrix is close to singular',1)
-
-  end if
-
-end subroutine invert_3x3_matrix
-
-END MODULE rVV10 
+END MODULE rVV10

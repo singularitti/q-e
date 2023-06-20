@@ -30,12 +30,12 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk)
   USE mp,                   ONLY : mp_bcast, mp_sum
   USE mp_bands,             ONLY : intra_bgrp_comm
   USE mp_world,             ONLY : world_comm
+  USE uspp_init,            ONLY : init_us_2
   !
   IMPLICIT NONE
   !
-  INTEGER :: spin_component, nks1, nks2, firstk, lastk, npw
+  INTEGER :: spin_component, nks1, nks2, firstk, lastk, npw, ndim
   INTEGER :: iunout, ios, ik, ibnd, jbnd, ipol, nbnd_occ
-  COMPLEX(DP) :: zdotc
   COMPLEX(DP), ALLOCATABLE :: ppsi(:,:), ppsi_us(:,:), matp(:,:,:)
   CHARACTER (len=256) :: filp, namefile
   !
@@ -85,7 +85,7 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk)
              ik,  (xk (ipol, ik) , ipol = 1, 3)
      !
      ALLOCATE(ppsi(npwx*npol,nbnd_occ))
-     IF (okvan) ALLOCATE(ppsi_us(npwx*npol,nbnd_occ))
+     ALLOCATE(ppsi_us(npwx*npol,nbnd_occ))
      !
      npw = ngk(ik)
      CALL init_us_2 (npw, igk_k(1,ik), xk(1,ik), vkb)
@@ -96,35 +96,29 @@ SUBROUTINE write_p_avg(filp, spin_component, firstk, lastk)
 
      CALL calbec ( npw, vkb, evc, becp, nbnd_occ )
 
+     IF (noncolin) THEN
+        ndim = npwx * npol
+     ELSE
+        ndim = npw
+     END IF
      DO ipol=1,3
         CALL compute_ppsi(ppsi, ppsi_us, ik, ipol, nbnd_occ, spin_component)
+        ! FIXME: use ZGEMM instead of DOT_PRODUCT
         DO ibnd=nbnd_occ+1,nbnd
            DO jbnd=1,nbnd_occ
-              IF (noncolin) THEN
-                 matp(ibnd-nbnd_occ,jbnd,ipol)=  &
-                         zdotc(npwx*npol,evc(1,ibnd),1,ppsi(1,jbnd),1)
-                 IF (okvan) THEN
-                    matp(ibnd-nbnd_occ,jbnd,ipol)=                  &
-                         matp(ibnd-nbnd_occ,jbnd,ipol)+             &
-                           (0.d0,0.5d0)*(et(ibnd,ik)-et(jbnd,ik))*  &
-                         (zdotc(npwx*npol,evc(1,ibnd),1,ppsi_us(1,jbnd),1) )
-                 ENDIF
-              ELSE
-                 matp(ibnd-nbnd_occ,jbnd,ipol)=  &
-                            zdotc(npw,evc(1,ibnd),1,ppsi(1,jbnd),1)
-                 IF (okvan) THEN
-                    matp(ibnd-nbnd_occ,jbnd,ipol)= &
-                               matp(ibnd-nbnd_occ,jbnd,ipol) +  &
-                   (0.d0,0.5d0)*zdotc(npw,evc(1,ibnd),1,ppsi_us(1,jbnd),1)* &
-                   (et(ibnd,ik)-et(jbnd,ik))
-
-                 ENDIF
+              matp(ibnd-nbnd_occ,jbnd,ipol)=  &
+                   DOT_PRODUCT( evc(1:ndim,ibnd),ppsi(1:ndim,jbnd) )
+              IF (okvan) THEN
+                 matp(ibnd-nbnd_occ,jbnd,ipol)=                  &
+                      matp(ibnd-nbnd_occ,jbnd,ipol)+             &
+                      (0.d0,0.5d0)*(et(ibnd,ik)-et(jbnd,ik))*  &
+                      DOT_PRODUCT( evc(1:ndim,ibnd),ppsi_us(1:ndim,jbnd))
               ENDIF
            ENDDO
         ENDDO
      ENDDO
      DEALLOCATE(ppsi)
-     IF (okvan) DEALLOCATE(ppsi_us)
+     DEALLOCATE(ppsi_us)
      CALL mp_sum(matp, intra_bgrp_comm)
 
      IF (ionode) THEN

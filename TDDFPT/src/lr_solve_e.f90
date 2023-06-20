@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2016 Quantum ESPRESSO group
+! Copyright (C) 2001-2021 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -27,17 +27,23 @@ SUBROUTINE lr_solve_e
   USE klist,                ONLY : nks, xk, ngk, igk_k, degauss
   USE lr_variables,         ONLY : nwordd0psi, iund0psi,LR_polarization, test_case_no, &
                                    & n_ipol, evc0, d0psi, d0psi2, evc1, lr_verbosity, &
-                                   & d0psi_rs, eels, lr_exx
-  USE lsda_mod,             ONLY : lsda, isk, current_spin
-  USE uspp,                 ONLY : vkb
+                                   & d0psi_rs, eels, lr_exx,  magnons, &
+                                   & V0psi, ipol, O_psi, n_op
+  USE lsda_mod,             ONLY : lsda, isk, current_spin,nspin
+  USE uspp,                 ONLY : vkb, okvan
   USE wvfct,                ONLY : nbnd, npwx, et, current_k
   USE control_flags,        ONLY : gamma_only
-  USE wavefunctions, ONLY : evc
+  USE wavefunctions,        ONLY : evc
   USE mp_global,            ONLY : inter_pool_comm, intra_bgrp_comm
   USE mp,                   ONLY : mp_max, mp_min, mp_barrier
-  USE control_lr,           ONLY : alpha_pv
+  USE control_lr,           ONLY : alpha_pv, nbnd_occx
   USE qpoint,               ONLY : nksq
-  USE noncollin_module,     ONLY : npol
+  USE noncollin_module,     ONLY : npol,noncolin
+  USE uspp_param,           ONLY : nhm
+  USE ions_base,            ONLY : nat
+  USE lrus,                 ONLY : intq, intq_nc
+  USE uspp_init,            ONLY : init_us_2
+
   !
   IMPLICIT NONE
   INTEGER :: ibnd, ik, is, ip
@@ -49,6 +55,7 @@ SUBROUTINE lr_solve_e
   LOGICAL :: exst
   real (kind=dp) :: anorm
   CHARACTER(len=256) :: tmp_dir_saved
+  INTEGER :: pol_index
   !
   CALL start_clock ('lr_solve_e')
   !
@@ -56,8 +63,46 @@ SUBROUTINE lr_solve_e
      !
      ! EELS case
      !
+     IF (okvan) THEN
+        ALLOCATE (intq (nhm, nhm, nat))
+        IF (noncolin) ALLOCATE(intq_nc( nhm, nhm, nat, nspin))
+        CALL lr_compute_intq()
+     ENDIF
+     !
      DO ik = 1, nksq
         CALL lr_dvpsi_eels(ik, d0psi(:,:,ik,1), d0psi2(:,:,ik,1))
+     ENDDO
+     !
+     IF (okvan) THEN
+        DEALLOCATE (intq)
+        IF (noncolin) DEALLOCATE(intq_nc)
+     ENDIF
+  ELSE IF (magnons) THEN
+     !
+     ! MAGNONS case
+     !
+     WRITE(stdout,'(5X,"magnon calculation, n_ipol =",1X,i3,1x,"n_op =", 1X,i3)') n_ipol, n_op
+     !
+     V0psi = (0.0d0,0.0d0)
+     O_psi = (0.0d0,0.0d0)
+     !
+     DO ik = 1, nksq
+        !
+        DO ip = 1, n_ipol
+           !
+           IF ( n_ipol == 1 ) THEN
+              pol_index = ipol 
+           ELSE 
+              pol_index = ip
+           ENDIF
+           !
+           CALL lr_dvpsi_magnons(ik, pol_index, V0psi(:,:,ik,:,ip))
+        ENDDO
+        !
+        DO ip = 1, n_op
+           CALL lr_Opsi_magnons(ik, ip, O_psi(:,:,ik,:,ip))
+        ENDDO
+        !
      ENDDO
      !
   ELSE
@@ -88,7 +133,8 @@ SUBROUTINE lr_solve_e
            !
            ! US case: calculate beta-functions vkb.
            !
-           CALL init_us_2(ngk(ik), igk_k(:,ik), xk(:,ik), vkb)
+           CALL init_us_2(ngk(ik), igk_k(:,ik), xk(:,ik), vkb, .true.)
+           !$acc update host(vkb)
            !
            ! Compute d0psi = P_c^+ r psi_k 
            !
@@ -116,7 +162,8 @@ SUBROUTINE lr_solve_e
         !
         IF (gamma_only) THEN
            CALL g2_kin(1)
-           CALL init_us_2(ngk(1), igk_k(:,1), xk(:,1), vkb)
+           CALL init_us_2(ngk(1), igk_k(:,1), xk(:,1), vkb, .true.)
+           !$acc update host(vkb)
         ENDIF
         !
       ENDIF 
@@ -135,18 +182,49 @@ SUBROUTINE lr_solve_e
   !
   IF ( wfc_dir /= 'undefined' ) tmp_dir = wfc_dir
   !
-  DO ip = 1, n_ipol
+  IF (.not. magnons) THEN
      !
-     IF (n_ipol==1) CALL diropn ( iund0psi, 'd0psi.'// &
-                 & trim(int_to_char(LR_polarization)), nwordd0psi, exst)
-     IF (n_ipol==3) CALL diropn ( iund0psi, 'd0psi.'// &
-                 & trim(int_to_char(ip)), nwordd0psi, exst)
+     DO ip = 1, n_ipol
+        !
+        IF (n_ipol==1) CALL diropn ( iund0psi, 'd0psi.'// &
+                    & trim(int_to_char(LR_polarization)), nwordd0psi, exst)
+        IF (n_ipol==3) CALL diropn ( iund0psi, 'd0psi.'// &
+                    & trim(int_to_char(ip)), nwordd0psi, exst)
+        !
+        CALL davcio(d0psi(1,1,1,ip),nwordd0psi,iund0psi,1,1)
+        !
+        CLOSE( UNIT = iund0psi)
+        !
+     ENDDO
      !
-     CALL davcio(d0psi(1,1,1,ip),nwordd0psi,iund0psi,1,1)
+  ELSE
      !
-     CLOSE( UNIT = iund0psi)
+     ! MAGNONS: Writing of V0psi and O_psi to the files
      !
-  ENDDO
+     nwordd0psi = 4 * nbnd_occx * npwx * npol * nksq
+     !
+     DO ip = 1, n_ipol
+        !
+        IF (n_ipol==1) CALL diropn ( iund0psi, 'V0psi.'//trim(int_to_char(ipol)), nwordd0psi, exst)
+        IF (n_ipol==3) CALL diropn ( iund0psi, 'V0psi.'//trim(int_to_char(ip)), nwordd0psi, exst)
+        !
+        CALL davcio(V0psi(:,:,:,:,ip),nwordd0psi,iund0psi,1,1)
+        !
+        CLOSE( UNIT = iund0psi)
+        !
+     ENDDO
+     !
+     DO ip = 1, n_op
+        !
+        CALL diropn ( iund0psi, 'O_psi.'//trim(int_to_char(ip)), nwordd0psi, exst)
+        !
+        CALL davcio(O_psi(:,:,:,:,ip),nwordd0psi,iund0psi,1,1)
+        !
+        CLOSE( UNIT = iund0psi)
+        !
+     ENDDO
+     !
+  ENDIF
   !
   ! EELS: Writing of d0psi2 to the file.
   !
@@ -177,6 +255,7 @@ SUBROUTINE compute_d0psi_rs( n_ipol )
   USE kinds,                ONLY : DP
   USE cell_base,            ONLY : at, bg, alat, omega
   USE fft_base,             ONLY : dfftp,dffts
+  USE fft_types,            ONLY : fft_index_to_3d
   USE mp_global,            ONLY : intra_bgrp_comm
   USE mp,                   ONLY : mp_barrier
   USE io_global,            ONLY : stdout
@@ -194,8 +273,9 @@ SUBROUTINE compute_d0psi_rs( n_ipol )
   !
   REAL(DP),    ALLOCATABLE :: r(:,:)
   COMPLEX(DP), ALLOCATABLE :: psic_temp(:), evc_temp(:,:)
-  INTEGER  :: i, j, k, ip, ir, ir_end, ibnb, n_ipol, idx, j0, k0
+  INTEGER  :: i, j, k, ip, ir, ir_end, ibnb, n_ipol
   REAL(DP) :: inv_nr1, inv_nr2, inv_nr3
+  LOGICAL  :: offrange
   !
   WRITE(stdout,'(/,5X,"Calculation of the dipole in real space")')
   !
@@ -224,10 +304,8 @@ SUBROUTINE compute_d0psi_rs( n_ipol )
   inv_nr3 = 1.D0 / DBLE( dfftp%nr3 )
   !
 #if defined (__MPI)
-  j0 = dfftp%my_i0r2p ; k0 = dfftp%my_i0r3p
   ir_end = MIN(dfftp%nnr,dfftp%nr1x*dfftp%my_nr2p*dfftp%my_nr3p)
 #else
-  j0 = 0 ; k0 = 0
   ir_end = dfftp%nnr
 #endif
   !
@@ -235,17 +313,8 @@ SUBROUTINE compute_d0psi_rs( n_ipol )
      !
      ! ... three dimensional indexes
      !
-     idx = ir -1
-     k   = idx / (dfftp%nr1x*dfftp%my_nr2p)
-     idx = idx - (dfftp%nr1x*dfftp%my_nr2p)*k
-     k   = k + k0
-     IF ( k .GE. dfftp%nr3 ) CYCLE
-     j   = idx / dfftp%nr1x
-     idx = idx - dfftp%nr1x * j
-     j   = j + j0
-     IF ( j .GE. dfftp%nr2 ) CYCLE
-     i   = idx
-     IF ( i .GE. dfftp%nr1 ) CYCLE
+     CALL fft_index_to_3d (ir, dfftp, i,j,k, offrange)
+     IF ( offrange ) CYCLE
      !
      DO ip = 1, n_ipol
         r(ir,ip) = DBLE( i )*inv_nr1*at(ip,1) + &
@@ -385,6 +454,8 @@ SUBROUTINE shift_d0psi( r, n_ipol )
   !
   mmin(:) = 2000.d0
   mmax(:)= -2000.d0
+  center(:) = 0.0d0
+  origin(:) = 0.0d0
   !
   do ip = 1, n_ipol
     do iatm = 1, nat
@@ -393,16 +464,16 @@ SUBROUTINE shift_d0psi( r, n_ipol )
     enddo
   enddo
   !
-  center(:)= 0.5d0*(mmin(:)+mmax(:))
   do ip = 1, n_ipol
-    origin(ip)= center(ip)-0.5d0*at(ip,ip)
+    center(ip) = 0.5d0*(mmin(ip)+mmax(ip))
+    origin(ip) = center(ip)-0.5d0*at(ip,ip)
   enddo
   !
   do ir = 1, dfftp%nnr
-    r(ir,:)= r(ir,:) - origin(:)
     do ip = 1, n_ipol
-      if(r(ir,ip) .lt. 0) r(ir,ip)=r(ir,ip)+at(ip,ip)
-      if(r(ir,ip) .gt. at(ip,ip)) r(ir,ip)=r(ir,ip)-at(ip,ip)
+      r(ir,ip)= r(ir,ip) - origin(ip)
+      if (r(ir,ip).lt.0)         r(ir,ip) = r(ir,ip) + at(ip,ip)
+      if (r(ir,ip).gt.at(ip,ip)) r(ir,ip) = r(ir,ip) - at(ip,ip)
     enddo
   enddo
   !

@@ -21,23 +21,24 @@ MODULE projections
   
   CONTAINS
     !
-    SUBROUTINE fill_nlmchi ( natomwfc, nwfc, lmax_wfc )
+    SUBROUTINE fill_nlmchi ( natomwfc, lmax_wfc )
       !
       USE ions_base, ONLY : ityp, nat
+      USE upf_ions, ONLY : n_atom_wfc
       USE uspp_param, ONLY: upf
-      USE spin_orb, ONLY: lspinorb
-      USE noncollin_module, ONLY: noncolin
+      USE noncollin_module, ONLY: noncolin, lspinorb
       !
       IMPLICIT NONE
-      INTEGER, INTENT (IN) :: natomwfc
-      INTEGER, INTENT (OUT) :: nwfc, lmax_wfc 
+      INTEGER, INTENT (OUT) :: natomwfc, lmax_wfc
       !
-      INTEGER :: na, nt, n, n1, n2, l, m, ind
+      INTEGER :: nwfc, na, nt, n, n1, n2, l, m, ind
       REAL(dp) :: jj, fact(2)
       REAL(dp), EXTERNAL :: spinor
       CHARACTER(LEN=2) :: label
       CHARACTER(LEN=1) :: spdf(0:3) = ['S','P','D','F']
       INTEGER :: nn(0:3)
+      !
+      natomwfc = n_atom_wfc (nat, ityp, noncolin)
       !
       ALLOCATE (nlmchi(natomwfc))
       nwfc=0
@@ -132,4 +133,38 @@ MODULE projections
       
     END SUBROUTINE fill_nlmchi
     !
-END MODULE projections
+    SUBROUTINE fill_nlmbeta( nkb, nwfc )
+      !
+      USE ions_base, ONLY : ityp, nat, ntyp => nsp
+      USE uspp_param, ONLY: upf
+      !
+      IMPLICIT NONE
+      INTEGER, INTENT(in)  :: nkb
+      INTEGER, INTENT(out) :: nwfc
+      !
+      INTEGER :: na, nt, nb, l, m
+      !
+      ALLOCATE (nlmchi(nkb))
+      nwfc=0
+      DO nt=1,ntyp
+         DO na=1,nat
+            IF (ityp(na)==nt) THEN
+               DO nb=1,upf(nt)%nbeta
+                  l=upf(nt)%lll(nb)
+                  DO m = 1, 2 * l + 1
+                     nwfc=nwfc+1
+                     nlmchi(nwfc)%na = na
+                     nlmchi(nwfc)%n =  nb
+                     nlmchi(nwfc)%l = l
+                     nlmchi(nwfc)%m = m
+                     nlmchi(nwfc)%ind = m
+                     nlmchi(nwfc)%jj  =  0.d0
+                  ENDDO
+               ENDDO
+            ENDIF
+         ENDDO
+      ENDDO
+      !
+    END SUBROUTINE fill_nlmbeta
+    !
+  END MODULE projections

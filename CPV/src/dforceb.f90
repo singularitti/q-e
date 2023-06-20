@@ -7,62 +7,65 @@
 !
 subroutine dforceb(c0, i, betae, ipol, bec0, ctabin, gqq, gqqm, qmat, dq2, df)
 
-! this subroutine computes the force for electrons
-! in case of Berry,s phase like perturbation
-! it gives the force for the i-th state
+  !! This subroutine computes the force for electrons in case of Berry phase
+  !! like perturbation.
+  !! It gives the force for the i-th state.
 
-! c0 input: Psi^0_i
 ! c1 input: Psi^1_i
-! i  input: ot computes the force for the i-th state
 ! v0      input: the local zeroth order potential
 ! v1      input: the local first order potential
-! betae  input: the functions beta_iR
-! ipol   input:the polarization of nabla_k
-! bec0   input: the factors <beta_iR|Psi^0_v>
 ! bec1   input: the factors <beta_iR|Psi^1_v>
-! ctabin input: the inverse-correspondence array g'+(-)1=g
-! gqq    input: the factors int dr Beta_Rj*Beta_Ri exp(iGr)
-! gqqm   input: the factors int dr Beta_Rj*Beta_Ri exp(iGr)
-! qmat   input: 
-!   dq2  input: factors d^2hxc_ijR
-!   df     output: force for the i-th state
-
 
   use kinds, only : DP
   use gvecw, only: ngw
   use  parameters
   use electrons_base, only: nx => nbspx, n => nbsp, nspin, f
   use constants, only :
-  use ions_base, only : nat, nax, na, nsp
+  use ions_base, only : nat, nax, nsp, ityp
   use cell_base, only: at, alat
-  use uspp_param, only: nh, nhm, nvb, ish
-  use uspp, only : nhsa=> nkb
+  use uspp_param, only: nh, nhm, upf
+  use uspp, only : nkb, ofsbeta
   use efield_module, ONLY : ctabin_missing_1,ctabin_missing_2,n_g_missing_m,&
        &      ctabin_missing_rev_1,ctabin_missing_rev_2
   use mp_global, only: intra_bgrp_comm, nproc_bgrp
   use mp, only: mp_alltoall
   use parallel_include
 
-
   implicit none
       
-      
-  complex(DP) c0(ngw, n), betae(ngw,nhsa), df(ngw),&
-       &   gqq(nhm,nhm,nax,nsp),gqqm(nhm,nhm,nax,nsp),&
-       &   qmat(nx,nx)
-  real(DP) bec0(nhsa,n), dq2(nat,nhm,nhm,nspin),  gmes
+  complex(DP) :: c0(ngw, n)
+  !! input: Psi^0_i
+  complex(DP) :: betae(ngw,nkb)
+  !! input: the functions beta_iR
+  complex(DP) :: df(ngw)
+  !! output: force for the i-th state
+  complex(DP) :: gqq(nhm,nhm,nax,nsp)
+  !! input: the factors int dr Beta_Rj*Beta_Ri exp(iGr)
+  complex(DP) :: gqqm(nhm,nhm,nax,nsp)
+  !! input: the factors int dr Beta_Rj*Beta_Ri exp(iGr)
+  complex(DP) :: qmat(nx,nx)
+  !! input
+  real(DP) :: bec0(nkb,n)
+  !! input: the factors <beta_iR|Psi^0_v>
+  real(DP) :: dq2(nat,nhm,nhm,nspin)
+  !! input: factors d^2hxc_ijR
+  integer :: i
+  !! input: ot computes the force for the i-th state
+  integer :: ctabin(ngw,2)
+  !! input: the inverse-correspondence array g'+(-)1=g
+  integer :: ipol
+  !! input:the polarization of nabla_k
+
   real(DP), EXTERNAL :: g_mes
+  
+  ! ... local variables
 
-  integer i, ipol, ctabin(ngw,2)
-
-! local variables
-
-  integer j,k,ig,iv,jv,ix,jx,is,ia, isa,iss,iss1,mism
-  integer ir,ism,itemp,itempa,jnl,inl
-  complex(DP) ci ,fi, fp, fm
-  real(DP) afr(nhsa), dd
-  complex(DP)  afrc(nhsa)
-  complex(DP), allocatable::  dtemp(:)
+  integer :: j,k,ig,iv,jv,ix,jx,is,ia, iss,iss1,mism
+  integer :: ir,ism,itemp,itempa,jnl,inl
+  complex(DP) :: ci ,fi, fp, fm
+  real(DP) :: afr(nkb), dd, gmes
+  complex(DP) :: afrc(nkb)
+  complex(DP), allocatable :: dtemp(:)
   complex(DP), allocatable :: sndbuf(:,:,:),rcvbuf(:,:,:)
   integer :: ierr, ip
 
@@ -191,17 +194,18 @@ subroutine dforceb(c0, i, betae, ipol, bec0, ctabin, gqq, gqqm, qmat, dq2, df)
 
 
 
-  if(nhsa.gt.0) then
-     do inl=1,nhsa
+  if(nkb > 0) then
+     do inl=1,nkb
         afrc(inl)=(0.d0,0.d0)
      end do
  
-     do is=1,nvb!loop on species
-        do iv=1,nh(is)      !loop on projectors           
-           do jv=1,nh(is)   !loop on projectors                               
-               do ia=1,na(is)
-                  inl=ish(is)+(iv-1)*na(is)+ia
-                  jnl=ish(is)+(jv-1)*na(is)+ia              
+     do ia=1,nat
+        is=ityp(ia)
+        IF(upf(is)%tvanp) THEN
+           do iv=1,nh(is)      !loop on projectors           
+              do jv=1,nh(is)   !loop on projectors                               
+                  inl = ofsbeta(ia) + iv
+                  jnl = ofsbeta(ia) + jv
                   do j=1,n  !loop on states
                      afrc(inl)=afrc(inl)+gqq(iv,jv,ia,is)*bec0(jnl,j)*qmat(j,i)&
                           &     -CONJG(gqq(jv,iv,ia,is))*bec0(jnl,j)*conjg(qmat(i,j))
@@ -210,13 +214,13 @@ subroutine dforceb(c0, i, betae, ipol, bec0, ctabin, gqq, gqqm, qmat, dq2, df)
                   end do
                end do
             end do
-         end do
-      enddo
+         ENDIF
+      end do
 
       do ig=1,ngw
          dtemp(ig)=(0.d0,0.d0)
       end do
-      do inl=1,nhsa
+      do inl=1,nkb
          do ig=1,ngw
             dtemp(ig)=dtemp(ig)+afrc(inl)*betae(ig,inl)
          enddo

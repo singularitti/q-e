@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2018 Quantum ESPRESSO group
+! Copyright (C) 2001-2021 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -49,13 +49,13 @@ SUBROUTINE write_chi (chi_, name_)
   !  
   IMPLICIT NONE
   !
-  CHARACTER(len=4), INTENT(IN) :: name_
+  CHARACTER(len=*), INTENT(IN) :: name_
   REAL(DP),         INTENT(IN) :: chi_(nath_sc, nat)
   INTEGER :: na
   !
   WRITE(iunitchi,'(6x,"row",2x,"column",2x,a4," matrix elements")') TRIM(name_)
   DO na = 1, nath_sc
-     WRITE(iunitchi,'(1x,i7,2x,i4,3x,5f19.15)') na, nah_pert, chi_(na, nah_pert)
+     WRITE(iunitchi,'(1x,i7,2x,i4,3x,f21.15)') na, nah_pert, chi_(na, nah_pert)
   ENDDO
   WRITE(iunitchi,*)
   !

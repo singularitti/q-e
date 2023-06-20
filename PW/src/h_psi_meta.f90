@@ -7,99 +7,120 @@
 !
 !
 !-----------------------------------------------------------------------
-subroutine h_psi_meta (ldap, np, mp, psip, hpsi)
+SUBROUTINE h_psi_meta( ldap, np, mp, psip, hpsi )
   !-----------------------------------------------------------------------
+  !! This routine computes the specific contribution from the meta-GGA
+  !! potential to H*psi; the result is added to hpsi.
   !
-  ! This routine computes the specific contribution from the meta-GGA
-  ! potential to H*psi; the result is added to hpsi
-  !
-  USE kinds,     ONLY : DP
-  USE cell_base, ONLY : tpiba
-  USE lsda_mod,  ONLY : nspin, current_spin
-  USE wvfct,     ONLY : current_k
-  USE gvect,     ONLY : g
-  USE scf,       ONLY : kedtau
-  USE klist,     ONLY : xk, igk_k
+  USE kinds,                ONLY : DP
+  USE cell_base,            ONLY : tpiba
+  USE lsda_mod,             ONLY : nspin, current_spin
+  USE wvfct,                ONLY : current_k
+  USE gvect,                ONLY : g
+  USE scf,                  ONLY : kedtau
+  USE klist,                ONLY : xk, igk_k
   USE control_flags,        ONLY : gamma_only
-  USE wavefunctions, ONLY : psic
+  USE wavefunctions,        ONLY : psic
   USE fft_base,             ONLY : dffts
-  USE fft_interfaces,       ONLY : fwfft, invfft
+  USE fft_wave,             ONLY : wave_r2g, wave_g2r
   !
-  implicit none
+  IMPLICIT NONE
   !
+  INTEGER :: ldap
+  !! leading dimension of arrays psip, hpsip
+  INTEGER :: np
+  !! true dimension of psip, hpsip
+  INTEGER :: mp
+  !! number of states psi
+  COMPLEX(DP) :: psip(ldap,mp)
+  !! the wavefunction
+  COMPLEX(DP) :: hpsi(ldap,mp)
+  !! Hamiltonian dot psip
+  !
+  ! ... local variables
+  !
+  COMPLEX(DP), ALLOCATABLE :: psi_g(:,:)
+  INTEGER :: im, i, j, nrxxs, ebnd, brange, psdim, dim_g
+  REAL(DP) :: kplusgi, fac
   COMPLEX(DP), PARAMETER :: ci=(0.d0,1.d0)
-  integer :: ldap, np, mp
-  complex(DP) :: psip (ldap, mp), hpsi (ldap, mp)
-  real (DP), allocatable :: kplusg (:)
-  !
-  integer :: im, j, nrxxs
   !
   CALL start_clock( 'h_psi_meta' )
+  !
   nrxxs = dffts%nnr
-  allocate (kplusg(np))
-  if (gamma_only) then
+  psdim = SIZE(psic)
+  dim_g = 1
+  IF (gamma_only) dim_g = 2
+  !
+  ALLOCATE( psi_g(psdim,dim_g) )
+  !
+  IF (gamma_only) THEN
      !
-     ! gamma algorithm
+     ! ... Gamma algorithm
      !
-     do im = 1, mp, 2
-        do j =1,3
-           psic(1:nrxxs) = ( 0.D0, 0.D0 )
+     DO im = 1, mp, 2
+        !
+        fac = 1.d0
+        IF ( im < mp ) fac = 0.5d0
+        !
+        DO j = 1, 3
            !
-           kplusg (1:np) = (xk(j,current_k)+g(j,1:np)) * tpiba
-           if (im < mp ) then
-              psic(dffts%nl (1:np)) =  ci * kplusg(1:np) * &
-                              ( psip (1:np,im) + ci * psip(1:np,im+1) )
-              psic(dffts%nlm(1:np)) = -ci * kplusg(1:np) * &
-                        CONJG ( psip (1:np,im) - ci * psip(1:np,im+1) )
-           else
-              psic(dffts%nl (1:np)) =  ci * kplusg(1:np) *       psip(1:np,im) 
-              psic(dffts%nlm(1:np)) = -ci * kplusg(1:np) * CONJG(psip(1:np,im))
-           end if
+           DO i = 1, np
+              kplusgi = (xk(j,current_k)+g(j,i)) * tpiba
+              psi_g(i,1) = CMPLX(0.D0,kplusgi) * psip(i,im)
+              IF ( im < mp ) psi_g(i,2) = CMPLX(0.d0,kplusgi) * psip(i,im+1)
+           ENDDO
            !
-           CALL invfft ('Wave', psic, dffts)
+           ebnd = im
+           IF ( im < mp ) ebnd = ebnd + 1
+           brange = ebnd-im+1
            !
-           psic(1:nrxxs) = kedtau(1:nrxxs,current_spin) * psic(1:nrxxs) 
+           CALL wave_g2r( psi_g(1:np,1:brange), psic, dffts )
            !
-           CALL fwfft ('Wave', psic, dffts)
+           psic(1:nrxxs) = kedtau(1:nrxxs,current_spin) * psic(1:nrxxs)
            !
-           if ( im < mp ) then
-              hpsi(1:np,im)  = hpsi(1:np,im)   - ci * kplusg(1:np) * 0.5d0 * &
-                       ( psic(dffts%nl(1:np)) + CONJG(psic(dffts%nlm(1:np))) )
-              hpsi(1:np,im+1)= hpsi(1:np,im+1) - kplusg(1:np) * 0.5d0 * &
-                       ( psic(dffts%nl(1:np)) - CONJG(psic(dffts%nlm(1:np))) )
-           else
-              hpsi(1:np,im) = hpsi(1:np,im) - ci * kplusg(1:np) * &
-                                              psic(dffts%nl(1:np))
-           end if
-        end do
-     end do
-  else
+           CALL wave_r2g( psic(1:dffts%nnr), psi_g(:,1:brange), dffts )
+           !
+           DO i = 1, np
+              kplusgi = (xk(j,current_k)+g(j,i)) * tpiba
+              hpsi(i,im) = hpsi(i,im) - ci * kplusgi * fac * psi_g(i,1)
+              IF ( im < mp ) hpsi(i,im+1) = hpsi(i,im+1) - ci * kplusgi * fac * psi_g(i,2)
+           ENDDO
+           !
+        ENDDO
+     ENDDO
      !
-     ! generic k algorithm
+  ELSE
      !
-     do im = 1, mp
-        do j =1,3
-           psic(1:nrxxs) = ( 0.D0, 0.D0 )
+     ! ... generic k algorithm
+     !
+     DO im = 1, mp
+        DO j = 1, 3
            !
-           kplusg (1:np) = (xk(j,current_k)+g(j,igk_k(1:np,current_k)))*tpiba
-           psic(dffts%nl(igk_k(1:np,current_k))) = CMPLX(0d0, kplusg(1:np),kind=DP)&
-                                            * psip (1:np,im)
+           DO i = 1, np
+              kplusgi = (xk(j,current_k)+g(j,igk_k(i,current_k)))*tpiba
+              psi_g(i,1) = CMPLX(0.D0,kplusgi,kind=DP) * psip(i,im)
+           ENDDO
            !
-           CALL invfft ('Wave', psic, dffts)
+           CALL wave_g2r( psi_g(1:np,1:1), psic, dffts, igk=igk_k(:,current_k) )
            !
-           psic(1:nrxxs) = kedtau(1:nrxxs,current_spin) * psic(1:nrxxs) 
+           psic(1:nrxxs) = kedtau(1:nrxxs,current_spin) * psic(1:nrxxs)
            !
-           CALL fwfft ('Wave', psic, dffts)
+           CALL wave_r2g( psic(1:dffts%nnr), psi_g(1:np,1:1), dffts, igk=igk_k(:,current_k) )
            !
-           hpsi(1:np,im) = hpsi(1:np,im) - CMPLX(0d0, kplusg(1:np),kind=DP) &
-                                         * psic(dffts%nl(igk_k(1:np,current_k)))
-        end do
-     end do
-  end if
-  deallocate (kplusg)
+           DO i = 1, np
+              kplusgi = (xk(j,current_k)+g(j,igk_k(i,current_k)))*tpiba
+              hpsi(i,im) = hpsi(i,im) - CMPLX(0.D0,kplusgi,KIND=DP) * psi_g(i,1)
+           ENDDO
+           !
+        ENDDO
+     ENDDO
+     !
+  ENDIF
+  !
+  DEALLOCATE( psi_g )
+  !
   CALL stop_clock( 'h_psi_meta' )
-
-
-  return
-
-end subroutine h_psi_meta
+  !
+  RETURN
+  !
+END SUBROUTINE h_psi_meta

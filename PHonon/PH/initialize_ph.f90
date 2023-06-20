@@ -8,13 +8,14 @@
 !-----------------------------------------------------------------------
 SUBROUTINE initialize_ph()
   !-----------------------------------------------------------------------
-  !
-  ! This is a driver to the phonon initialization routines.
+  !! This is a driver to the phonon initialization routines.
   !
   USE klist,  ONLY : nks, nkstot
   !
   USE qpoint, ONLY : nksq, nksqtot, ikks, ikqs
+  USE qpoint_aux, ONLY : ikmks, ikmkmqs
   USE control_lr, ONLY : lgamma
+  USE noncollin_module, ONLY : noncolin, domag
   !
   IMPLICIT NONE
   INTEGER :: ik
@@ -23,23 +24,49 @@ SUBROUTINE initialize_ph()
   !
   IF ( lgamma ) THEN
      !
-     nksq = nks
-     nksqtot = nkstot
-     ALLOCATE(ikks(nksq), ikqs(nksq))
-     DO ik=1,nksq
-        ikks(ik) = ik
-        ikqs(ik) = ik
-     ENDDO
+     IF (noncolin.AND.domag) THEN
+        nksq = nks/2
+        nksqtot = nkstot/2
+        ALLOCATE(ikks(nksq), ikqs(nksq))
+        ALLOCATE(ikmks(nksq), ikmkmqs(nksq))
+        DO ik=1,nksq
+           ikks(ik) = 2*ik-1
+           ikqs(ik) = 2*ik-1
+           ikmks(ik) = 2*ik
+           ikmkmqs(ik) = 2*ik
+        ENDDO
+     ELSE
+        nksq = nks
+        nksqtot = nkstot
+        ALLOCATE(ikks(nksq), ikqs(nksq))
+        DO ik=1,nksq
+           ikks(ik) = ik
+           ikqs(ik) = ik
+        ENDDO
+     END IF
      !
   ELSE
      !
-     nksq = nks / 2
-     nksqtot = nkstot / 2
-     ALLOCATE(ikks(nksq), ikqs(nksq))
-     DO ik=1,nksq
-        ikks(ik) = 2 * ik - 1
-        ikqs(ik) = 2 * ik
-     ENDDO
+     IF (noncolin.AND.domag) THEN
+        nksq = nks / 4
+        nksqtot = nkstot / 4
+        ALLOCATE(ikks(nksq), ikqs(nksq))
+        ALLOCATE(ikmks(nksq), ikmkmqs(nksq))
+        DO ik=1,nksq
+           ikks(ik) = 4 * ik - 3
+           ikqs(ik) = 4 * ik - 2
+           ikmks(ik) = 4 * ik - 1
+           ikmkmqs(ik) = 4 * ik 
+        ENDDO
+     ELSE
+        nksq = nks / 2
+        nksqtot = nkstot / 2
+        ALLOCATE(ikks(nksq), ikqs(nksq))
+        DO ik=1,nksq
+           ikks(ik) = 2 * ik - 1
+           ikqs(ik) = 2 * ik
+        ENDDO
+     END IF
      !
   END IF
   !

@@ -5,15 +5,13 @@
   outdir      = './'
 
   elph        = .true.
-  kmaps       = .false.
   epbwrite    = .true.
   epbread     = .false.
-
   epwwrite    = .true.
   epwread     = .false.
+  vme         = 'dipole'
 
   nbndsub     =  8
-  nbndskip    =  0
 
   wannierize  = .true.
   num_iter    = 300
@@ -35,20 +33,19 @@
   nel         = 0.01
   epsiHEG     = 12.0
   meff        = 0.25
-  
+
   plselfen    = .true.
   elecselfen  = .false.
   phonselfen  = .false.
   a2f         = .false.
-   
+
   band_plot   = .true.
 
-
   fsthick     = 3.0
-  eptemp      = 20.0
+  temps       = 20.0
   degaussw    = 0.01
- 
-  specfun_pl  = .true.
+
+  specfun_pl   = .true.
   wmax_specfun = 8.0
   wmin_specfun = 6.0
   nw_specfun   = 20
@@ -59,7 +56,7 @@
   dvscf_dir   = './save'
   filkf       = './LGX.txt'
   filqf       = './qgrid.txt'
-  
+
   nk1         = 4
   nk2         = 4
   nk3         = 4
@@ -67,6 +64,3 @@
   nq2         = 1
   nq3         = 1
  /
-  1 cartesian
-  0.000000000   0.000000000   0.000000000 
-

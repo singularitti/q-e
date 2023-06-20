@@ -1,5 +1,5 @@
 !
-! Copyright (C) 2001-2016 Quantum ESPRESSO group
+! Copyright (C) 2001-2019 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
@@ -30,7 +30,7 @@ SUBROUTINE lr_dvpsi_e(ik,ipol,dvpsi)
   USE wvfct,                ONLY : npwx, nbnd, g2kin, et
   USE wavefunctions, ONLY : evc
   USE gvect,                ONLY : g
-  USE noncollin_module,     ONLY : noncolin, npol
+  USE noncollin_module,     ONLY : npol
   USE becmod,               ONLY : allocate_bec_type, calbec, becp, &
                                    & deallocate_bec_type,  bec_type
   USE uspp,                 ONLY : okvan, nkb, vkb
@@ -84,7 +84,7 @@ SUBROUTINE lr_dvpsi_e(ik,ipol,dvpsi)
   !
   CALL allocate_bec_type ( nkb, nbnd, becp2 )
   !
-  CALL commutator_Hx_psi (ik, nbnd_occ(ik), becp1, becp2, ipol, d0psi )
+  CALL commutator_Hx_psi (ik, nbnd_occ(ik), at(:, ipol), becp1, becp2, d0psi(:, 1:nbnd_occ(ik)) )
   !
   IF (okvan) CALL calbec ( npw, vkb, evc, becp, nbnd)
   !
@@ -108,10 +108,9 @@ SUBROUTINE lr_dvpsi_e(ik,ipol,dvpsi)
   !
   CALL cgsolve_all (ch_psi_all, cg_psi, et (1, ik), d0psi, dvpsi, &
        h_diag, npwx, npw, thresh, ik, lter, conv_root, anorm, nbnd_occ(ik), 1)
-  !
-  IF (.not.conv_root) WRITE( stdout, '(5x,"ik",i4," ibnd",i4, &
+  IF (.not.conv_root) WRITE( stdout, '(5x,"ik",i4, &
        & " lr_dvpsi_e: root not converged ",e10.3)') &
-       ik, ibnd, anorm
+       ik, anorm
   !
   FLUSH( stdout )
   DEALLOCATE (h_diag)
@@ -147,7 +146,8 @@ SUBROUTINE lr_dvpsi_e(ik,ipol,dvpsi)
   !
   IF (okvan) THEN
      ALLOCATE (spsi ( npwx*npol, nbnd))
-     CALL lr_sm1_psi (.TRUE.,ik,npwx,ngk(ik),nbnd,dvpsi,spsi)
+     CALL lr_sm1_initialize()
+     CALL lr_sm1_psi(ik,npwx,ngk(ik),nbnd,dvpsi,spsi)
      dvpsi(:,:) = spsi(:,:)
      DEALLOCATE(spsi)
   ENDIF

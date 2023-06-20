@@ -1,10 +1,16 @@
-program lax_test
-  use descriptors
-  USE la_param
+ PROGRAM lax_test
+  use laxlib_descriptor
+  USE laxlib_parallel_include
   use dspev_module
   IMPLICIT NONE
+  include 'laxlib_kinds.fh'
+  include 'laxlib_param.fh'
+  include 'laxlib_hi.fh'
+  include 'laxlib_low.fh'
 #if defined(__MPI)
   INTEGER    STATUS(MPI_STATUS_SIZE)
+#else
+#define MPI_MAX_PROCESSOR_NAME 64
 #endif
   INTEGER :: mype, npes, comm, ntgs, root
   LOGICAL :: iope
@@ -22,13 +28,11 @@ program lax_test
   INTEGER :: ortho_comm_id= 0 ! id of the ortho_comm
   INTEGER :: ortho_parent_comm  = 0  ! parent communicator from which ortho group has been created
   !
-#if defined __SCALAPACK
-  INTEGER :: me_blacs   =  0  ! BLACS processor index starting from 0
-  INTEGER :: np_blacs   =  1  ! BLACS number of processor
-#endif
-  !
-  INTEGER :: world_cntx = -1  ! BLACS context of all processor
-  INTEGER :: ortho_cntx = -1  ! BLACS context for ortho_comm
+  LOGICAL :: do_distr_diag_inside_bgrp = .FALSE.
+  LOGICAL :: la_proc
+  INTEGER, ALLOCATABLE :: rank_ip( :, : )
+  INTEGER, ALLOCATABLE :: irc_ip( : )
+  INTEGER, ALLOCATABLE :: nrc_ip( : )
   !
 #if defined(__INTEL_COMPILER)
 #if __INTEL_COMPILER  >= 1300
@@ -55,9 +59,11 @@ program lax_test
   REAL*8  :: tempo_avg(100)
 
   TYPE(la_descriptor) :: desc
+  INTEGER :: idesc(LAX_DESC_SIZE)
   INTEGER :: i, ir, ic, nx, n, nr, nc  ! size of the matrix
   INTEGER :: n_in, nlen, dest, sour, tag, ii
-  INTEGER :: nnodes
+  INTEGER :: n_diag ! number of MPI processes participated in diagonalization
+  INTEGER :: nnodes ! number of nodes by hostname
   !
   integer :: nargs
   CHARACTER(LEN=80) :: arg
@@ -76,7 +82,7 @@ program lax_test
   !
   !   default parameter 
   !
-  n_in = 1024
+  n_in = 512
   !
   nargs = command_argument_count()
   do i = 1, nargs - 1
@@ -118,7 +124,7 @@ program lax_test
 #endif
 
 
-  OPEN ( unit = 6, file = TRIM('test.out'), status='unknown' )
+  !OPEN ( unit = 6, file = TRIM('test.out'), status='unknown' )
 
   !
   !write(6,*) 'mype = ', mype, ' npes = ', npes
@@ -212,17 +218,13 @@ program lax_test
   s = 1.0d0
   c = 1.0d0
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
-#if defined(__MPI)
-  tempo(1) = MPI_WTIME()
-#endif
+  tempo(1) = mpi_wall_time()
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
   CALL dgemm('n', 'n', nx, nx, nx, 1.0d0, A, nx, s, nx, 1.0d0, C, nx)
-#if defined(__MPI)
-  tempo(2) = MPI_WTIME()
-#endif
+  tempo(2) = mpi_wall_time()
   DEALLOCATE( s )
   DEALLOCATE( a )
   DEALLOCATE( c )
@@ -257,7 +259,7 @@ program lax_test
 #if defined(__MPI)
      CALL MPI_BARRIER( MPI_COMM_WORLD, ierr)
      if( ( mype == sour ) .or. ( mype == dest ) ) THEN
-        tempo(1) = MPI_WTIME()
+        tempo(1) = mpi_wall_time()
         if( mype == dest ) then
            CALL MPI_SEND(s, nx*nx, MPI_DOUBLE_PRECISION, sour, TAG, MPI_COMM_WORLD, ierr)
            CALL MPI_RECV(s, nx*nx, MPI_DOUBLE_PRECISION, sour, TAG+NPES*NPES, MPI_COMM_WORLD, status, ierr)
@@ -265,14 +267,14 @@ program lax_test
            CALL MPI_RECV(s, nx*nx, MPI_DOUBLE_PRECISION, dest, TAG, MPI_COMM_WORLD, status, ierr)
            CALL MPI_SEND(s, nx*nx, MPI_DOUBLE_PRECISION, dest, TAG+NPES*NPES, MPI_COMM_WORLD, ierr)
         endif
-        tempo(2) = MPI_WTIME()
+        tempo(2) = mpi_wall_time()
         perf_matrix( proc2node( ii+1 ), proc2node( i+1 ) ) = perf_matrix( proc2node( ii+1 ), proc2node( i+1 ) ) + &
            2.0d0*DBLE(nx*nx)*8.0d0/(tempo(2)-tempo(1))/1.0D+9
         perf_count( proc2node( ii+1 ), proc2node( i+1 ) ) = perf_count( proc2node( ii+1 ), proc2node( i+1 ) ) + 1
      END IF
      CALL MPI_BARRIER( MPI_COMM_WORLD, ierr)
      if( ( mype == sour ) .or. ( mype == dest ) ) THEN
-        tempo(1) = MPI_WTIME()
+        tempo(1) = mpi_wall_time()
         if( mype == dest ) then
            CALL MPI_SEND(ii, 1, MPI_BYTE, sour, TAG, MPI_COMM_WORLD, ierr)
            CALL MPI_RECV(ii, 1, MPI_BYTE, sour, TAG+NPES, MPI_COMM_WORLD, status, ierr)
@@ -280,7 +282,7 @@ program lax_test
            CALL MPI_RECV(ii, 1, MPI_BYTE, dest, TAG, MPI_COMM_WORLD, status, ierr)
            CALL MPI_SEND(ii, 1, MPI_BYTE, dest, TAG+NPES, MPI_COMM_WORLD, ierr)
         endif
-        tempo(2) = MPI_WTIME()
+        tempo(2) = mpi_wall_time()
         latency_matrix( proc2node( ii+1 ), proc2node( i+1 ) ) = latency_matrix( proc2node( ii+1 ), proc2node( i+1 ) ) + &
            (tempo(2)-tempo(1))
      END IF
@@ -326,10 +328,18 @@ program lax_test
   end if
   DEALLOCATE( s )
   DEALLOCATE( tempo_tutti )
-
-  call mp_start_diag()
   !
-  CALL descla_init( desc, n, n, np_ortho, me_ortho, ortho_comm, ortho_cntx, ortho_comm_id )
+  !
+  n_diag = n
+  CALL laxlib_start(n_diag, mpi_comm_world, do_distr_diag_inside_bgrp)
+  CALL laxlib_getval( np_ortho = np_ortho, ortho_comm = ortho_comm, &
+    do_distr_diag_inside_bgrp = do_distr_diag_inside_bgrp )
+  !
+  ALLOCATE(rank_ip( np_ortho(1), np_ortho(2) ))
+  ALLOCATE( irc_ip( np_ortho(1) ), nrc_ip (np_ortho(1) ) )
+  CALL desc_init( n, nx, la_proc, idesc, rank_ip, irc_ip, nrc_ip  )
+  !
+  CALL laxlib_intarray_to_desc( desc, idesc )
   !
   nx = 1
   IF( desc%active_node > 0 ) nx = desc%nrcx
@@ -349,7 +359,7 @@ program lax_test
   !
   CALL set_a()
   !
-  CALL diagonalize_parallel( n, a, d, s, desc )
+  CALL diagonalize_parallel_x( n, a, d, s, idesc )
   !
   tempo = 0.0d0
   tempo_mio = 0.0d0
@@ -357,32 +367,39 @@ program lax_test
   tempo_max = 0.0d0
   tempo_avg = 0.0d0
 
+
   CALL set_a()
   !
+#if defined(__MPI)
   CALL MPI_BARRIER( MPI_COMM_WORLD, ierr)
-  tempo(1) = MPI_WTIME()
+#endif
+  tempo(1) = mpi_wall_time()
   !
-  CALL diagonalize_parallel( n, a, d, s, desc )
+  CALL diagonalize_parallel_x( n, a, d, s, idesc )
   !
+#if defined(__MPI)
   CALL MPI_BARRIER( MPI_COMM_WORLD, ierr)
-  tempo(2) = MPI_WTIME()
+#endif
+  tempo(2) = mpi_wall_time()
   !
-  CALL sqr_mm_cannon( 'N', 'N', n, 1.0d0, a, nx, s, nx, 0.0d0, c, nr, desc)
+  CALL sqr_mm_cannon( 'N', 'N', n, 1.0d0, a, nx, s, nx, 0.0d0, c, nr, idesc)
   !
+#if defined(__MPI)
   CALL MPI_BARRIER( MPI_COMM_WORLD, ierr)
-  tempo(3) = MPI_WTIME()
+#endif
+  tempo(3) = mpi_wall_time()
   !
   do i = 2, 10
      tempo_mio(i) = tempo(i)-tempo(i-1)
   end do
-  !
 #if defined(__MPI)
   CALL MPI_ALLREDUCE( tempo_mio, tempo_min, 100, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, ierr )
   CALL MPI_ALLREDUCE( tempo_mio, tempo_max, 100, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, ierr )
   CALL MPI_ALLREDUCE( tempo_mio, tempo_avg, 100, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, ierr )
 #else
-  tempo_min = tempo
-  tempo_max = tempo
+  tempo_min = tempo_mio
+  tempo_max = tempo_mio
+  tempo_avg = tempo_mio
 #endif
 
   tempo_avg = tempo_avg / npes
@@ -435,8 +452,10 @@ program lax_test
   deallocate( node_name )
   deallocate( proc2node )
   deallocate( perf_matrix )
+  deallocate( latency_matrix )
   deallocate( perf_count )
-
+  deallocate( a, s, d, c )
+  deallocate( rank_ip, irc_ip, nrc_ip )
 
 #if defined(__MPI)
   CALL mpi_finalize(ierr)
@@ -444,161 +463,6 @@ program lax_test
 
 
 contains
-
-  !----------------------------------------------------------------------------
-  SUBROUTINE mp_start_diag( )
-    !---------------------------------------------------------------------------
-    !
-    ! ... Ortho/diag/linear algebra group initialization
-    !
-    IMPLICIT NONE
-    !
-    INTEGER :: ierr = 0
-    INTEGER :: color, key, nproc_try
-
-#if defined __SCALAPACK
-    INTEGER, ALLOCATABLE :: blacsmap(:,:)
-    INTEGER :: ortho_cntx_pe
-    INTEGER :: nprow, npcol, myrow, mycol, i, j, k
-    INTEGER, EXTERNAL :: BLACS_PNUM
-    !
-    INTEGER :: nparent=1
-    INTEGER :: total_nproc=1
-    INTEGER :: total_mype=0
-    INTEGER :: nproc_parent=1
-    INTEGER :: my_parent_id=0
-#endif
-
-    !
-#if defined __SCALAPACK
-    !
-    CALL mpi_comm_rank( MPI_COMM_WORLD, me_blacs, ierr)
-    CALL mpi_comm_size( MPI_COMM_WORLD, np_blacs, ierr)
-    !
-    ! define a 1D grid containing all MPI tasks of the global communicator
-    ! NOTE: world_cntx has the MPI communicator on entry and the BLACS context
-    ! on exit
-    !       BLACS_GRID_INIT() will create a copy of the communicator, which can
-    !       be
-    !       later retrieved using CALL BLACS_GET(world_cntx, 10, comm_copy)
-    !
-    world_cntx = MPI_COMM_WORLD
-    CALL BLACS_GRIDINIT( world_cntx, 'Row', 1, np_blacs )
-    !
-#endif
-    !
-    ! the ortho group for parallel linear algebra is a sub-group of the pool,
-    ! then there are as many ortho groups as pools.
-    !
-#if defined __MPI
-
-    nproc_try = MAX( npes, 1 )
-
-    !  find the square closer (but lower) to nproc_try
-    !
-    CALL grid2d_dims( 'S', nproc_try, np_ortho(1), np_ortho(2) )
-    !
-    !  now, and only now, it is possible to define the number of tasks
-    !  in the ortho group for parallel linear algebra
-    !
-    nproc_ortho = np_ortho(1) * np_ortho(2)
-    !
-    !  here we choose the first "nproc_ortho" processors
-    !
-    color = 0
-    IF( mype < nproc_ortho ) color = 1
-    !
-    key   = mype
-    !
-    !  initialize the communicator for the new group by splitting the input
-    !  communicator
-    !
-    CALL mpi_comm_split( MPI_COMM_WORLD , color, key, ortho_comm, ierr )
-    !
-    ! Computes coordinates of the processors, in row maior order
-    !
-    CALL mpi_comm_rank( ortho_comm, me_ortho1, ierr)
-    !
-    IF( mype == 0 .AND. me_ortho1 /= 0 ) &
-         CALL lax_error__( " init_ortho_group ", " wrong root task in ortho group ", ierr )
-    !
-    if( color == 1 ) then
-       ! this task belong to the ortho_group compute its coordinates
-       ortho_comm_id = 1
-       CALL GRID2D_COORDS( 'R', me_ortho1, np_ortho(1), np_ortho(2), me_ortho(1), me_ortho(2) )
-       CALL GRID2D_RANK( 'R', np_ortho(1), np_ortho(2), me_ortho(1), me_ortho(2), ierr )
-       IF( ierr /= me_ortho1 ) &
-            CALL lax_error__( " init_ortho_group ", " wrong task coordinates in ortho group ", ierr )
-       IF( me_ortho1 /= mype ) &
-            CALL lax_error__( " init_ortho_group ", " wrong rank assignment in ortho group ", ierr )
-       CALL mpi_comm_split( ortho_comm , me_ortho(2), me_ortho(1), ortho_col_comm, ierr )
-       CALL mpi_comm_split( ortho_comm , me_ortho(1), me_ortho(2), ortho_row_comm, ierr )
-    else
-       ! this task does NOT belong to the ortho_group set dummy values
-       ortho_comm_id = 0
-       me_ortho(1) = me_ortho1
-       me_ortho(2) = me_ortho1
-    endif
-
-#if defined __SCALAPACK
-    !
-    !  This part is used to eliminate the image dependency from ortho groups
-    !  SCALAPACK is now independent of whatever level of parallelization
-    !  is present on top of pool parallelization
-    !
-    total_nproc = npes
-    total_mype = mype
-    !
-    ALLOCATE( blacsmap( np_ortho(1), np_ortho(2) ) )
-
-    CALL BLACS_GET( world_cntx, 10, ortho_cntx_pe ) ! retrieve communicator of world context
-    blacsmap = 0
-    nprow = np_ortho(1)
-    npcol = np_ortho(2)
-
-    IF( ortho_comm_id > 0  ) THEN
-
-       blacsmap( me_ortho(1) + 1, me_ortho(2) + 1 ) = BLACS_PNUM( world_cntx, 0, me_blacs )
-
-    END IF
-
-   ! All MPI tasks defined in the global communicator take part in the definition of the BLACS grid
-
-   CALL MPI_ALLREDUCE( MPI_IN_PLACE, blacsmap, SIZE( blacsmap ), MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr )
-
-   CALL BLACS_GRIDMAP( ortho_cntx_pe, blacsmap, nprow, nprow, npcol)
-   CALL BLACS_GRIDINFO( ortho_cntx_pe, nprow, npcol, myrow, mycol )
-
-   IF( ortho_comm_id > 0) THEN
-
-        IF(  np_ortho(1) /= nprow ) &
-           CALL lax_error__( ' init_ortho_group ', ' problem with SCALAPACK, wrong no. of task rows ', 1 )
-        IF(  np_ortho(2) /= npcol ) &
-           CALL lax_error__( ' init_ortho_group ', ' problem with SCALAPACK, wrong no. of task columns ', 1 )
-        IF(  me_ortho(1) /= myrow ) &
-           CALL lax_error__( ' init_ortho_group ', ' problem with SCALAPACK, wrong task row ID ', 1 )
-        IF(  me_ortho(2) /= mycol ) &
-           CALL lax_error__( ' init_ortho_group ', ' problem with SCALAPACK, wrong task columns ID ', 1 )
-
-        ortho_cntx = ortho_cntx_pe
-
-    END IF
-
-    DEALLOCATE( blacsmap )
-
-
-#endif
-
-#else
-
-    ortho_comm_id = 1
-
-#endif
-
-    RETURN
-  END SUBROUTINE 
-
-
 
   SUBROUTINE set_a()
      INTEGER :: i, j, ii, jj
@@ -617,6 +481,19 @@ contains
       RETURN
    END SUBROUTINE set_a
 
-
-
+  function mpi_wall_time ()
+    real*8 :: mpi_wall_time
+#if defined(__MPI)
+    mpi_wall_time = MPI_WTIME()
+#else
+    ! standard way to get the wall time, sometimes with very low precision
+    integer :: cr, nc
+    real*8, save :: t0 = -1.0
+    !
+    call system_clock(count_rate=cr)
+    call system_clock(count=nc)
+    if ( t0 < 0.0 ) t0 = dble(nc)/cr
+    mpi_wall_time = dble(nc)/cr - t0
+#endif
+  end function mpi_wall_time
 end program lax_test

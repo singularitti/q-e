@@ -7,68 +7,110 @@
 !
 !
 !----------------------------------------------------------------------
-subroutine stres_har (sigmahar)
-  !----------------------------------------------------------------------
+SUBROUTINE stres_har( sigmahar )
+  !--------------------------------------------------------------------
+  !! Calculates the Hartree contribution to the stress
   !
-  USE kinds, ONLY : DP
-  USE constants, ONLY : e2, fpi
-  USE cell_base, ONLY: omega, tpiba2
-  USE ener,      ONLY: ehart
-  USE fft_base,  ONLY : dfftp
-  USE fft_interfaces,ONLY : fwfft
-  USE gvect,     ONLY: ngm, gstart, g, gg
-  USE scf,       ONLY: rho
-  USE control_flags,        ONLY: gamma_only
-  USE wavefunctions, ONLY : psic
-  USE mp_bands,  ONLY: intra_bgrp_comm
-  USE mp,        ONLY: mp_sum
-  USE Coul_cut_2D,  ONLY: do_cutoff_2D, cutoff_stres_sigmahar
-
-  implicit none
+  USE kinds,              ONLY: DP
+  USE constants,          ONLY: e2, fpi
+  USE cell_base,          ONLY: omega, tpiba2
+  USE ener,               ONLY: ehart
+  USE fft_base,           ONLY: dfftp
+  USE fft_rho,            ONLY: rho_r2g
+  USE gvect,              ONLY: ngm, gstart, g, gg
+  USE scf,                ONLY: rho
+  USE control_flags,      ONLY: gamma_only
+  USE mp_bands,           ONLY: intra_bgrp_comm
+  USE mp,                 ONLY: mp_sum
+  USE Coul_cut_2D,        ONLY: do_cutoff_2D, cutoff_stres_sigmahar
   !
-  real(DP) :: sigmahar (3, 3), shart, g2
-  real(DP), parameter :: eps = 1.d-8
-  integer :: ig, l, m
-
-  sigmahar(:,:) = 0.d0
-  psic (:) = CMPLX (rho%of_r(:,1), KIND=dp)
-
-  CALL fwfft ('Rho', psic, dfftp)
-  ! psic contains now the charge density in G space
-  ! the  G=0 component is not computed
-  IF (do_cutoff_2D) THEN  
-    call cutoff_stres_sigmahar(psic, sigmahar)
+  IMPLICIT NONE
+  !
+  REAL(DP) :: sigmahar(3,3)
+  !! Hartree term of the stress tensor
+  !
+  ! ... local variables
+  !
+  REAL(DP) :: shart, g2
+  COMPLEX(DP), ALLOCATABLE :: rhog(:,:)
+  REAL(DP), PARAMETER :: eps = 1.E-8_DP
+  INTEGER :: ig, l, m
+  REAL(DP) :: sigmahar11, sigmahar31, sigmahar21, &
+              sigmahar32, sigmahar22, sigmahar33
+  !
+  ALLOCATE( rhog(dfftp%nnr,1) )
+  !$acc data create(rhog)
+  !
+  CALL rho_r2g( dfftp, rho%of_r(:,1), rhog )
+  !
+  ! ... the G=0 component is not computed
+  !
+  sigmahar(:,:) = 0.0_DP
+  !
+  IF (do_cutoff_2D) THEN
+     !
+     CALL cutoff_stres_sigmahar( rhog(:,1), sigmahar )
+     !
   ELSE
-  do ig = gstart, ngm
-     g2 = gg (ig) * tpiba2
-     shart = psic (dfftp%nl (ig) ) * CONJG(psic (dfftp%nl (ig) ) ) / g2
-     do l = 1, 3
-        do m = 1, l
-           sigmahar (l, m) = sigmahar (l, m) + shart * tpiba2 * 2 * &
-                g (l, ig) * g (m, ig) / g2
-        enddo
-     enddo
-  enddo
-  ENDIF 
+     !
+     sigmahar11 = 0._DP  ;  sigmahar31 = 0._DP
+     sigmahar21 = 0._DP  ;  sigmahar32 = 0._DP
+     sigmahar22 = 0._DP  ;  sigmahar33 = 0._DP
+     !
+     !$acc parallel loop reduction(+:sigmahar11,sigmahar21,sigmahar22,&
+     !$acc&                          sigmahar31,sigmahar32,sigmahar33)
+     DO ig = gstart, ngm
+       !
+       g2 = gg(ig)
+       !
+       shart = DBLE(rhog(ig,1)*CONJG(rhog(ig,1))) / g2
+       !
+       sigmahar11 = sigmahar11 + shart *2._DP * &
+                                 g(1,ig) * g(1,ig) / g2
+       sigmahar21 = sigmahar21 + shart *2._DP * &
+                                 g(2,ig) * g(1,ig) / g2
+       sigmahar22 = sigmahar22 + shart *2._DP * &
+                                 g(2,ig) * g(2,ig) / g2
+       sigmahar31 = sigmahar31 + shart *2._DP * &
+                                 g(3,ig) * g(1,ig) / g2
+       sigmahar32 = sigmahar32 + shart *2._DP * &
+                                 g(3,ig) * g(2,ig) / g2
+       sigmahar33 = sigmahar33 + shart *2._DP * &
+                                 g(3,ig) * g(3,ig) / g2
+     ENDDO
+     !
+     sigmahar(1,1) = sigmahar(1,1) + sigmahar11 / tpiba2
+     sigmahar(2,1) = sigmahar(2,1) + sigmahar21 / tpiba2
+     sigmahar(2,2) = sigmahar(2,2) + sigmahar22 / tpiba2
+     sigmahar(3,1) = sigmahar(3,1) + sigmahar31 / tpiba2
+     sigmahar(3,2) = sigmahar(3,2) + sigmahar32 / tpiba2
+     sigmahar(3,3) = sigmahar(3,3) + sigmahar33 / tpiba2
+     !
+  ENDIF
   !
-  call mp_sum(  sigmahar, intra_bgrp_comm )
+  !$acc end data
+  DEALLOCATE( rhog )
   !
-  if (gamma_only) then
-     sigmahar(:,:) =       fpi * e2 * sigmahar(:,:)
-  else
-     sigmahar(:,:) = 0.5d0 * fpi * e2 * sigmahar(:,:)
-  end if
-  do l = 1, 3
-     sigmahar (l, l) = sigmahar (l, l) - ehart / omega
-  enddo
-  do l = 1, 3
-     do m = 1, l - 1
-        sigmahar (m, l) = sigmahar (l, m)
-     enddo
-  enddo
-
+  CALL mp_sum( sigmahar, intra_bgrp_comm )
+  !
+  IF (gamma_only) THEN
+    sigmahar(:,:) = fpi * e2 * sigmahar(:,:)
+  ELSE
+    sigmahar(:,:) = fpi * e2 * sigmahar(:,:) * 0.5_DP
+  ENDIF
+  !
+  DO l = 1, 3
+    sigmahar(l,l) = sigmahar(l,l) - ehart / omega
+  ENDDO
+  !
+  DO l = 1, 3
+    DO m = 1, l-1
+      sigmahar(m,l) = sigmahar(l,m)
+    ENDDO
+  ENDDO
+  !
   sigmahar(:,:) = -sigmahar(:,:)
-
-  return
-end subroutine stres_har
-
+  !
+  RETURN
+  !
+END SUBROUTINE stres_har

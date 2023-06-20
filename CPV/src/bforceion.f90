@@ -8,46 +8,45 @@
 
 subroutine bforceion(fion,tfor,ipol,qmatinv,bec0,becdr,gqq,evalue)
 
-! this subroutine compute the part of force for the ions due to
-! electronic berry phase( see internal notes)
-! it needs becdr
-
-! fion       : input, forces on ions
-! tfor       : input, if true it computes force
-! at         : input, direct lattice vectors, divided by alat
-! ipol       : input, electric field polarization
-! qmatinv    : input, inverse of Q matrix: Q_i,j=<Psi_i|exp(iG*r)|Psi_j>
-! bec0       : input, factors <beta_iR|Psi_j>
-! becdr      : input, factors d<beta_iR|Psi_j>/dR
-! gqq        : input, Int_e exp(iG*r)*q_ijR(r)
-! evalue     : input, scale of electric field
+  !! This subroutine computes the part of force for the ions due to
+  !! electronic Berry phase (see internal notes).  
+  !! It needs \(\text{becdr}\) as input variable.
  
-  use ions_base, only : nax, na, nsp
-  use uspp_param, only: nvb, ish
+  use ions_base, only : nax, na, nsp, nat, ityp
+  use uspp_param, only: upf, nh, nhm
+  use uspp, only : nkb, ofsbeta
   use kinds, only : dp
   use constants, only :
-  use cell_base, only: at, alat
-  use uspp_param, only: nh, nhm
-  use uspp, only : nhsa=> nkb
+  use cell_base, only: at, alat ! at: direct lattice vectors, divided by alat
   use electrons_base, only: nbsp, nbspx, nspin, nbspx_bgrp
   use mp_global, only: nbgrp
 
-
   implicit none
 
-  real(dp) evalue
-  complex(dp) qmatinv(nbspx,nbspx),gqq(nhm,nhm,nax,nsp)
-  real(dp) bec0(nhsa,nbspx),becdr(nhsa,nbspx,3)
-  real(dp) fion(3,*)
-  integer ipol
-  logical tfor
+  real(dp) :: evalue
+  !! input, scale of electric field
+  complex(dp) :: qmatinv(nbspx,nbspx)
+  !! input, inverse of Q matrix:
+  !! \( Q_{i,j}=\langle\Psi_i|\exp(iG\ r)|\Psi_j\rangle\)
+  complex(dp) :: gqq(nhm,nhm,nax,nsp)
+  !! input, \( \text{Int}_e \exp(iG\ r)\ q_ijR(r) \)
+  real(dp) :: bec0(nkb,nbspx)
+  !! input, factors \(\langle \beta_{iR}|\Psi_j\rangle\)
+  real(dp) :: becdr(nkb,nbspx,3)
+  !! input, factors \(d\langle\beta_{iR}|\Psi_j\rangle/dR \)
+  real(dp) :: fion(3,*)
+  !! input, forces on ions
+  integer :: ipol
+  !! input, electric field polarization
+  logical :: tfor
+  !! input, if TRUE it computes force
+  
+  ! ... local variables
 
-!local variables
-
-  complex(dp) ci, temp, temp1,temp2,temp3
+  complex(dp) :: ci, temp, temp1,temp2,temp3
   real(dp) :: gmes
   real(dp), external :: g_mes
-  integer iv,jv,ia,is,k,i,j,isa,ilm,jlm,inl,jnl,ism
+  integer :: iv,jv,ia,is,k,i,j,ilm,jlm,inl,jnl,ism
       
   if(.not. tfor) return
 
@@ -57,15 +56,13 @@ subroutine bforceion(fion,tfor,ipol,qmatinv,bec0,becdr,gqq,evalue)
   ci = (0.d0,1.d0)
   gmes = g_mes (ipol, at, alat) 
 
-  isa = 0
-  do is=1,nvb
-   do ia=1,na(is)
-     isa = isa + 1
-     do iv= 1,nh(is)
-        do jv=1,nh(is)         
-              inl=ish(is)+(iv-1)*na(is)+ia
-              jnl=ish(is)+(jv-1)*na(is)+ia
-             
+  do ia=1,nat
+     is=ityp(ia)
+     IF(upf(is)%tvanp) THEN
+        do iv= 1,nh(is)
+           do jv=1,nh(is)         
+              inl = ofsbeta(ia) + iv
+              jnl = ofsbeta(ia) + jv
               temp=(0.d0,0.d0)
               temp1=(0.d0,0.d0)
               temp2=(0.d0,0.d0)
@@ -89,13 +86,13 @@ subroutine bforceion(fion,tfor,ipol,qmatinv,bec0,becdr,gqq,evalue)
                  enddo
               enddo
 
-              fion(ipol,isa) = fion(ipol,isa) -   2.d0*evalue*AIMAG(temp)/gmes
-              fion(1,isa) = fion(1,isa) -   2.d0*evalue*AIMAG(temp1)/gmes
-              fion(2,isa) = fion(2,isa) -   2.d0*evalue*AIMAG(temp2)/gmes
-              fion(3,isa) = fion(3,isa) -   2.d0*evalue*AIMAG(temp3)/gmes
+              fion(ipol,ia) = fion(ipol,ia) -   2.d0*evalue*AIMAG(temp)/gmes
+              fion(1,ia) = fion(1,ia) -   2.d0*evalue*AIMAG(temp1)/gmes
+              fion(2,ia) = fion(2,ia) -   2.d0*evalue*AIMAG(temp2)/gmes
+              fion(3,ia) = fion(3,ia) -   2.d0*evalue*AIMAG(temp3)/gmes
            end do
         end do
-     end do
+     END IF
   end do
 
   return

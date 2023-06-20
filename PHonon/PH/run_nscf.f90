@@ -8,21 +8,18 @@
 !-----------------------------------------------------------------------
 SUBROUTINE run_nscf(do_band, iq)
   !-----------------------------------------------------------------------
+  !! This is the main driver of the \(\texttt{pwscf}\) program called from
+  !! the \(\texttt{PHonon}\) code.
   !
-  ! ... This is the main driver of the pwscf program called from the
-  ! ... phonon code.
-  !
-  !
-  USE control_flags,   ONLY : conv_ions
+  USE control_flags,   ONLY : conv_ions, restart, io_level
   USE basis,           ONLY : starting_wfc, starting_pot, startingconfig
   USE io_files,        ONLY : prefix, tmp_dir, wfc_dir, seqopn
   USE lsda_mod,        ONLY : nspin
-  USE control_flags,   ONLY : restart
   USE check_stop,      ONLY : check_stop_now
   USE fft_base,        ONLY : dffts, dfftp
   !!!
   USE fft_types, ONLY: fft_type_allocate
-  USE cell_base, ONLY: at, bg
+  USE cell_base, ONLY: at, bg, tpiba
   USE gvect,     ONLY: gcutm
   USE gvecs,     ONLY: gcutms
   !!!
@@ -30,8 +27,8 @@ SUBROUTINE run_nscf(do_band, iq)
   USE control_ph,      ONLY : reduce_io, recover, tmp_dir_phq, &
                               ext_restart, bands_computed, newgrid, qplot, &
                               only_wfc
-  USE io_global,       ONLY : stdout
-  USE save_ph,         ONLY : tmp_dir_save
+  USE io_global,       ONLY : stdout, ionode
+  !USE save_ph,         ONLY : tmp_dir_save
   !
   USE grid_irr_iq,     ONLY : done_bands
   USE acfdtest,        ONLY : acfdt_is_active, acfdt_num_der, ir_point, delta_vrs
@@ -41,8 +38,15 @@ SUBROUTINE run_nscf(do_band, iq)
   USE lr_symm_base,    ONLY : minus_q, nsymq, invsymq
   USE control_lr,      ONLY : ethr_nscf
   USE qpoint,          ONLY : xq
-  USE klist,           ONLY : qnorm, nelec 
+  USE noncollin_module,ONLY : noncolin, domag
+  USE klist,           ONLY : qnorm, nelec
   USE el_phon,         ONLY : elph_mat
+  USE ahc,             ONLY : elph_ahc
+  USE mp_images,       ONLY : intra_image_comm
+  USE mp,              ONLY : mp_barrier
+  USE rism_module,     ONLY : lrism, rism_set_restart
+  USE two_chem,        ONLY : twochem
+
   !
   IMPLICIT NONE
   !
@@ -63,12 +67,13 @@ SUBROUTINE run_nscf(do_band, iq)
      ! FIXME: kunit is set here: in this case we do not go through setup_nscf
      ! FIXME: and read_file calls divide_et_impera that needs kunit
      ! FIXME: qnorm (also set in setup_nscf) is needed by allocate_nlpot
-     IF ( lgamma_iq(iq) ) THEN
-        kunit = 1
-     ELSE
-        kunit = 2
+     kunit = 2
+     IF ( lgamma_iq(iq) ) kunit = 1
+     IF (noncolin.AND.domag) THEN 
+        kunit = 4
+        IF (lgamma_iq(iq)) kunit=2
      ENDIF
-     qnorm = SQRT(xq(1)**2+xq(2)**2+xq(3)**2)
+     qnorm = SQRT(xq(1)**2+xq(2)**2+xq(3)**2) * tpiba
      !
      CALL read_file()
      IF (.NOT.lgamma_iq(iq).OR.(qplot.AND.iq>1)) CALL &
@@ -77,8 +82,6 @@ SUBROUTINE run_nscf(do_band, iq)
   ENDIF
   !
   CALL clean_pw( .FALSE. )
-  !
-  CALL close_files(.true.)
   !
   ! From now on, work only on the _ph virtual directory
   !
@@ -95,21 +98,24 @@ SUBROUTINE run_nscf(do_band, iq)
   ethr_nscf      = 1.0D-9 / nelec 
   ! threshold for diagonalization ethr_nscf - should be good for all cases
   !
+  IF (lrism) CALL rism_set_restart()
+  !
   CALL fft_type_allocate ( dfftp, at, bg, gcutm,  intra_bgrp_comm, nyfft=nyfft )
   CALL fft_type_allocate ( dffts, at, bg, gcutms, intra_bgrp_comm, nyfft=nyfft)
   !
-  CALL setup_nscf ( newgrid, xq, elph_mat )
+  CALL setup_nscf ( newgrid, xq, elph_mat .OR. elph_ahc )
+  !
   !
   CALL init_run()
   !
-!!!!!!!!!!!!!!!!!!!!!!!! ACFDT TEST !!!!!!!!!!!!!!!!
+!°°°°°°°°°°°°°°°°°°°° ACFDT TEST °°°°°°°°°°°°°°°°°°°°°°°°°
   IF (acfdt_is_active) THEN
     ! ACFDT mumerical derivative test: modify the potential
     IF (acfdt_num_der) vrs(ir_point,1)=vrs(ir_point,1) + delta_vrs
   ENDIF
-!!!!!!!!!!!!!!!!!!!!!!!!END OF ACFDT TEST !!!!!!!!!!!!!!!!
+!°°°°°°°°°°°°°°°°°END OF ACFDT TEST °°°°°°°°°°°°°°°°°°°°°°
 !
-  IF (do_band) CALL non_scf ( )
+  IF (do_band.and..not.elph_mat) CALL non_scf_ph ( )
 
 
   IF ( check_stop_now() ) THEN
@@ -137,7 +143,11 @@ SUBROUTINE run_nscf(do_band, iq)
   CLOSE( UNIT = 4, STATUS = 'DELETE' )
   ext_restart=.FALSE.
   !
-  CALL close_files(.true.)
+  IF (io_level > 0) THEN
+     CALL close_files(.true.)
+  ELSE
+     CALL mp_barrier( intra_image_comm )  
+  ENDIF
   !
 
   bands_computed=.TRUE.

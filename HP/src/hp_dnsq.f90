@@ -33,19 +33,18 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
   USE buffers,              ONLY : get_buffer
   USE mp_pools,             ONLY : intra_pool_comm, inter_pool_comm       
   USE mp,                   ONLY : mp_sum
-  USE io_files,             ONLY : seqopn
   USE io_global,            ONLY : stdout
   USE constants,            ONLY : rytoev
   USE control_flags,        ONLY : iverbosity
   USE qpoint,               ONLY : nksq, ikks, ikqs
   USE control_lr,           ONLY : lgamma, nbnd_occ
-  USE units_lr,             ONLY : iuwfc, lrwfc, iuatswfc
+  USE units_lr,             ONLY : iuwfc, lrwfc, iuatswfc, iudwf, lrdwf
   USE lr_symm_base,         ONLY : nsymq
   USE ldaU,                 ONLY : Hubbard_lmax, Hubbard_l, is_hubbard, offsetU, nwfcU
   USE ldaU_hp,              ONLY : conv_thr_chi, trace_dns_tot_old, &
-                                   conv_thr_chi_best, iter_best, iudwfc, lrdwfc, &
-                                   swfcatomk, swfcatomkpq
-  USE hp_efermi_shift,      ONLY : def
+                                   conv_thr_chi_best, iter_best
+  USE ldaU_lr,              ONLY : swfcatomk, swfcatomkpq
+  USE efermi_shift,         ONLY : def
   !
   IMPLICIT NONE
   !
@@ -66,8 +65,6 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
   ! number of plane waves at k and k+q
   COMPLEX(DP), ALLOCATABLE :: dpsi(:, :), proj1(:,:), proj2(:,:)
   REAL(DP) :: weight, wdelta, w1
-  REAL(DP),    EXTERNAL :: DDOT
-  COMPLEX(DP), EXTERNAL :: ZDOTC
   REAL(DP),    EXTERNAL :: w0gauss ! an approximation to the delta function
   COMPLEX(DP) :: trace_dns(2)
   COMPLEX(DP), ALLOCATABLE :: trace_dns_tot(:)
@@ -123,7 +120,7 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
      !
      ! At each SCF iteration for each ik read dpsi from file
      !
-     CALL get_buffer (dpsi, lrdwfc, iudwfc, ik)
+     CALL get_buffer (dpsi, lrdwf, iudwf, ik)
      ! 
      ! Loop on Hubbard atoms
      !
@@ -139,11 +136,11 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
               !
               !  proj1(ibnd, ihubst) = < S(k)*phi(k) | psi(k) >
               !  proj2(ibnd, ihubst) = < S(k+q)*phi(k+q) | dpsi(k+q) > 
-              ! 
+              ! FIXME: use ZGEMM instead of dot_product
               !                
               DO ibnd = 1, nbnd_occ(ikk)
-                 proj1(ibnd, ihubst) = ZDOTC (npw,  swfcatomk(:,ihubst),   1, evc(:,ibnd),  1)
-                 proj2(ibnd, ihubst) = ZDOTC (npwq, swfcatomkpq(:,ihubst), 1, dpsi(:,ibnd), 1)
+                 proj1(ibnd, ihubst) = DOT_PRODUCT( swfcatomk(1:npw,ihubst), evc(1:npw,ibnd) )
+                 proj2(ibnd, ihubst) = DOT_PRODUCT( swfcatomkpq(1:npwq,ihubst), dpsi(1:npwq,ibnd) )
               ENDDO
               !
            ENDDO 
@@ -152,10 +149,8 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
         !
      ENDDO
      !
-#if defined (__MPI)
      CALL mp_sum(proj1, intra_pool_comm)  
      CALL mp_sum(proj2, intra_pool_comm)
-#endif
      ! 
      DO na = 1, nat
         !
@@ -188,7 +183,7 @@ SUBROUTINE hp_dnsq (lmetq0, iter, conv_root, dnsq)
                        w1 = weight * wdelta
                        !
                        dnsq(m1, m2, current_spin, na) = dnsq(m1, m2, current_spin, na) +  &
-                          w1 * def * CONJG(proj1(ibnd,ihubst1)) * proj1(ibnd,ihubst2)
+                          w1 * def(1) * CONJG(proj1(ibnd,ihubst1)) * proj1(ibnd,ihubst2)
                        !
                     ENDIF
                     ! 

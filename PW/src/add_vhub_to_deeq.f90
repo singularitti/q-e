@@ -1,13 +1,14 @@
 !
-! Copyright (C) 2010-2013 Quantum ESPRESSO group
+! Copyright (C) 2010-2022 Quantum ESPRESSO group
 ! This file is distributed under the terms of the
 ! GNU General Public License. See the file `License'
 ! in the root directory of the present distribution,
 ! or http://www.gnu.org/copyleft/gpl.txt .
 !
-SUBROUTINE add_vhub_to_deeq(deeq)
-  !
-  ! Add Hubbard contributions to deeq when U_projection is pseudo
+SUBROUTINE add_vhub_to_deeq( deeq )
+!-----------------------------------------------------------------
+  !! Add Hubbard contributions to the integral of V_eff and Q_{nm} when 
+  !! Hubbard_projectors is pseudo.
   !
   USE kinds,         ONLY : DP
   USE ions_base,     ONLY : nat, ntyp => nsp, ityp
@@ -15,8 +16,14 @@ SUBROUTINE add_vhub_to_deeq(deeq)
   USE lsda_mod,      ONLY : nspin
   USE scf,           ONLY : v
   USE ldaU,          ONLY : is_hubbard, Hubbard_l, offsetU, q_ae
+  !
   IMPLICIT NONE
+  !
   REAL(KIND=DP), INTENT(INOUT) :: deeq( nhm, nhm, nat, nspin )
+  !! integral of V_eff and Q_{nm}
+  !
+  !  ... local variables
+  !
   INTEGER :: na, nt, ih, jh, ijh, m1, m2, ow1, ow2
   !
   !

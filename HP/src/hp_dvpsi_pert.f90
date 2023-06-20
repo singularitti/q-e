@@ -20,8 +20,6 @@ subroutine hp_dvpsi_pert (ik)
   !
   ! dvpsi is for a given "k", "q" and "J"
   !
-  ! dvpsi is READ from file if this_pert_is_on_file(ik) = .TRUE.
-  ! otherwise dvpsi is COMPUTED and WRITTEN on file 
   ! (evc, swfcatomk, swfcatomkpq must be set)
   !
   USE kinds,                ONLY : DP
@@ -38,8 +36,8 @@ subroutine hp_dvpsi_pert (ik)
   USE units_lr,             ONLY : iuatswfc
   USE control_lr,           ONLY : lgamma
   USE ldaU,                 ONLY : Hubbard_lmax, Hubbard_l, offsetU, nwfcU
-  USE ldaU_hp,              ONLY : nqsh, perturbed_atom, this_pert_is_on_file, &
-                                   iudvwfc, lrdvwfc, swfcatomk, swfcatomkpq
+  USE ldaU_hp,              ONLY : nqsh, perturbed_atom, iudvwfc, lrdvwfc
+  USE ldaU_lr,              ONLY : swfcatomk, swfcatomkpq
   !
   IMPLICIT NONE
   !
@@ -50,7 +48,6 @@ subroutine hp_dvpsi_pert (ik)
   INTEGER :: npw, npwq
   ! number of plane waves at k and k+q
   COMPLEX (DP), ALLOCATABLE :: proj(:,:) 
-  COMPLEX(DP), EXTERNAL :: ZDOTC
   !
   CALL start_clock ('hp_dvpsi_pert')
   !
@@ -60,23 +57,11 @@ subroutine hp_dvpsi_pert (ik)
   DO na = 1, nat
      IF (perturbed_atom(na)) counter = counter + 1
   ENDDO
-  IF (counter.NE.1) CALL errore( 'hp_dvpsi_pert', "One perturbed atom must be specified", 1) 
+  IF (counter /= 1) CALL errore( 'hp_dvpsi_pert', "One perturbed atom must be specified", 1)
   !
   dvpsi(:,:) = (0.0d0, 0.0d0)
   !
-  ! If this is not the first iteration, hence dvpsi was already
-  ! computed before. So read it from file and exit.
-  !
-  IF (this_pert_is_on_file(ik)) THEN
-     !
-     CALL get_buffer(dvpsi, lrdvwfc, iudvwfc, ik)
-     CALL stop_clock ('hp_dvpsi_pert')
-     RETURN  
-     !  
-  ENDIF
-  !
-  ! If this is a first iteration, then dvpsi must be computed
-  ! and written on file.
+  ! Compute dvpsi for ik and write on buffer iudvwfc
   !
   ALLOCATE (proj(nbnd,nwfcU))
   !
@@ -98,7 +83,8 @@ subroutine hp_dvpsi_pert (ik)
         DO m = 1, 2 * Hubbard_l(nt) + 1
            ihubst = offsetU(na) + m   ! I m index
            DO ibnd = 1, nbnd
-              proj(ibnd, ihubst) = ZDOTC(npw, swfcatomk(:,ihubst ), 1, evc(:,ibnd), 1)
+              ! FIXME: use ZGEMM instead of dot_product
+              proj(ibnd, ihubst) = DOT_PRODUCT( swfcatomk(1:npw,ihubst ), evc(1:npw,ibnd) )
            ENDDO
         ENDDO
      ENDIF
@@ -126,7 +112,6 @@ subroutine hp_dvpsi_pert (ik)
   ! Write dvpsi on file.
   !
   CALL save_buffer(dvpsi, lrdvwfc, iudvwfc, ik)
-  this_pert_is_on_file(ik) = .true.
   !
   DEALLOCATE (proj)
   !

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # run from directory where this script is
-cd `echo $0 | sed 's/\(.*\)\/.*/\1/'` # extract pathname
+cd `dirname $0`
 EXAMPLE_DIR=`pwd`
 
 # check whether ECHO has the -e option
@@ -70,30 +70,6 @@ for FILE in $PSEUDO_LIST ; do
 done
 $ECHO " done"
 
-# check for vdw kernel table
-$ECHO " "
-$ECHO "  checking that needed vdW kernel tables exist...\c"
-for VDW_TABLE in vdW_kernel_table rVV10_kernel_table ; do
-GEN_COMMAND="$PARA_PREFIX $BIN_DIR/generate_${VDW_TABLE}.x $PARA_POSTFIX"
-if test ! -r $PSEUDO_DIR/$VDW_TABLE ; then
-        $ECHO " "
-        $ECHO "  WARNING: $PSEUDO_DIR/$VDW_TABLE not existent or not readable"
-        $ECHO "  WARNING: a new table will be generated, this process may take up to 20 mins"
-        $ECHO "  WARNING: (depending on your cpu power and configuration)."
-        $ECHO
-        $ECHO "  Generating $VDW_TABLE...\c"
-        if $GEN_COMMAND ; then
-                if test ! -r $VDW_TABLE ; then
-                        $ECHO "  ERROR: cannot generate VDW_TABLE !!"
-                        exit 1
-                fi
-                $ECHO "done ! Table moved to $PSEUDO_DIR"
-                mv $VDW_TABLE $PSEUDO_DIR
-        fi
-fi
-done
-$ECHO " done"
-
 # how to run executables
 PW_COMMAND="$PARA_PREFIX $BIN_DIR/pw.x $PARA_POSTFIX"
 PH_COMMAND="$PARA_PREFIX $BIN_DIR/ph.x $PARA_POSTFIX"
@@ -122,10 +98,10 @@ cat > graphite.scf.in << EOF
 /
 
 &system
-    ibrav           = 4 
+    ibrav           = 4
     celldm(1)       = 4.64630333
     celldm(3)       = 2.58254285
-    nat             = 4 
+    nat             = 4
     ntyp            = 1
     ecutwfc         = 30.0
     ecutrho         = 180.0
@@ -178,7 +154,7 @@ phonons of graphite
    amass(1)=12.0107,
    fildyn='graphiteK.dyn',
  /
-0.33333333 0.57735027 0.0 
+0.33333333 0.57735027 0.0
 EOF
 $ECHO "  running the Grimme D2 phonon calculation at K for Graphite...\c"
 $PH_COMMAND < graphite.phK.in > graphite.phK.out
@@ -206,10 +182,10 @@ cat > graphite.scf.in << EOF
 /
 
 &system
-    ibrav           = 4 
+    ibrav           = 4
     celldm(1)       = 4.64630333
     celldm(3)       = 2.58254285
-    nat             = 4 
+    nat             = 4
     ntyp            = 1
     ecutwfc         = 30.0
     ecutrho         = 180.0
@@ -262,7 +238,7 @@ phonons of graphite
    amass(1)=12.0107,
    fildyn='graphiteK.dyn',
  /
-0.33333333 0.57735027 0.0 
+0.33333333 0.57735027 0.0
 EOF
 $ECHO "  running the $VDWDF phonon calculation at K for Graphite...\c"
 $PH_COMMAND < graphite.phK.in > graphite.$VDWDF.phK.out
